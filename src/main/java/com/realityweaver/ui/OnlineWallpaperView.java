@@ -25,6 +25,7 @@ import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -33,6 +34,9 @@ import javafx.stage.FileChooser;
 
 /** Searches multiple image catalogs and saves selected results into the local wallpaper library. */
 public final class OnlineWallpaperView extends VBox {
+    private static final List<String> SEARCH_CATEGORIES = List.of(
+            "Nature", "City", "Architecture", "Space", "Fantasy", "Ocean", "Forest", "Desert");
+
     private final WallpaperSearchService searchService = new WallpaperSearchService();
     private final WallpaperLibrary library = new WallpaperLibrary();
     private final Consumer<Path> onSaved;
@@ -77,7 +81,7 @@ public final class OnlineWallpaperView extends VBox {
         sourceSelector.setPrefWidth(205);
         sourceSelector.getStyleClass().add("online-source-selector");
 
-        searchField.setPromptText("Try Kyoto, Iceland, mountains, or nebula");
+        searchField.setPromptText("Try Kyoto, Iceland, mountains, fantasy city, or architecture");
         searchField.setOnAction(event -> search());
         HBox.setHgrow(searchField, Priority.ALWAYS);
 
@@ -88,21 +92,38 @@ public final class OnlineWallpaperView extends VBox {
         return new HBox(10, sourceSelector, searchField, searchButton, trendingButton);
     }
 
-    private HBox createExploreRow() {
-        Label label = new Label("Explore places:");
-        label.getStyleClass().add("online-result-details");
-        HBox row = new HBox(8, label);
-        row.setAlignment(Pos.CENTER_LEFT);
+    private VBox createExploreRow() {
+        FlowPane placesRow = new FlowPane(8, 8);
+        placesRow.setAlignment(Pos.CENTER_LEFT);
+        Label placesLabel = new Label("Places:");
+        placesLabel.getStyleClass().add("online-result-details");
+        placesRow.getChildren().add(placesLabel);
         for (String place : List.of("Kyoto", "Iceland", "Santorini", "Patagonia", "New York")) {
-            Button suggestion = new Button(place);
-            suggestion.getStyleClass().add("quiet-button");
-            suggestion.setOnAction(event -> {
-                searchField.setText(place);
-                search();
-            });
-            row.getChildren().add(suggestion);
+            placesRow.getChildren().add(createSuggestionButton(place));
         }
+
+        FlowPane categoriesRow = new FlowPane(8, 8);
+        categoriesRow.setAlignment(Pos.CENTER_LEFT);
+        Label categoriesLabel = new Label("Categories:");
+        categoriesLabel.getStyleClass().add("online-result-details");
+        categoriesRow.getChildren().add(categoriesLabel);
+        for (String category : SEARCH_CATEGORIES) {
+            categoriesRow.getChildren().add(createSuggestionButton(category));
+        }
+
+        VBox row = new VBox(8, placesRow, categoriesRow);
+        row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    private Button createSuggestionButton(String value) {
+        Button suggestion = new Button(value);
+        suggestion.getStyleClass().add("quiet-button");
+        suggestion.setOnAction(event -> {
+            searchField.setText(value);
+            search();
+        });
+        return suggestion;
     }
 
     private Label createSourceNote() {

@@ -1,5 +1,6 @@
 package com.realityweaver.ui;
 
+import com.realityweaver.auth.LocalAccount;
 import java.util.Optional;
 
 import javafx.geometry.Insets;
@@ -7,6 +8,7 @@ import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.Label;
+import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.Node;
@@ -19,6 +21,8 @@ import javafx.scene.shape.Circle;
 
 /** Builds the starter dashboard and its in-memory "create world" interaction. */
 public final class DashboardView extends BorderPane {
+    private final LocalAccount account;
+    private final Runnable onSignOut;
     private final StackPane screenHost = new StackPane();
     private final Button studioNav = new Button("Studio");
     private final Button wallpaperNav = new Button("Wallpapers");
@@ -29,7 +33,9 @@ public final class DashboardView extends BorderPane {
     private Node studioScreen;
     private WallpaperStudioView wallpaperScreen;
 
-    public DashboardView() {
+    public DashboardView(LocalAccount account, Runnable onSignOut) {
+        this.account = account;
+        this.onSignOut = onSignOut;
         getStyleClass().add("app-shell");
         studioScreen = createScrollableDashboard();
         wallpaperScreen = new WallpaperStudioView();
@@ -72,7 +78,17 @@ public final class DashboardView extends BorderPane {
         status.setAlignment(Pos.CENTER);
         status.getStyleClass().add("workspace-badge");
 
-        HBox topBar = new HBox(26, brand, navigation, spacer, status);
+        Label accountName = new Label(account.displayName());
+        accountName.getStyleClass().add("account-name");
+        accountName.setMaxWidth(130);
+        accountName.setTextOverrun(OverrunStyle.ELLIPSIS);
+        Button signOut = new Button("Sign out");
+        signOut.getStyleClass().add("sign-out-button");
+        signOut.setOnAction(event -> onSignOut.run());
+        HBox profile = new HBox(12, accountName, signOut);
+        profile.setAlignment(Pos.CENTER);
+
+        HBox topBar = new HBox(20, brand, navigation, spacer, status, profile);
         topBar.setAlignment(Pos.CENTER_LEFT);
         topBar.setPadding(new Insets(18, 48, 18, 48));
         topBar.getStyleClass().add("top-bar");

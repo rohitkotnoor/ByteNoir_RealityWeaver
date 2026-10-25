@@ -702,3 +702,108 @@
 .scroll-bar:vertical .decrement-arrow {
     -fx-background-color: transparent;
 }
+
+.auth-page {
+    -fx-background-color: radial-gradient(center 50% 38%, radius 72%, #201a30, #0d1018 78%);
+}
+
+.auth-card {
+    -fx-background-color: linear-gradient(to bottom right, #1a1b28, #131620);
+    -fx-background-radius: 20px;
+    -fx-border-color: #383347;
+    -fx-border-radius: 20px;
+    -fx-border-width: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(3, 4, 10, 0.44), 28, 0.12, 0, 10);
+}
+
+.auth-title {
+    -fx-text-fill: #f4f1fb;
+    -fx-font-size: 25px;
+    -fx-font-weight: 700;
+}
+
+.auth-description {
+    -fx-text-fill: #a7a3b3;
+    -fx-font-size: 12px;
+    -fx-line-spacing: 3px;
+}
+
+.auth-field-label {
+    -fx-text-fill: #d2cedc;
+    -fx-font-size: 11px;
+    -fx-font-weight: 600;
+}
+
+.auth-card .text-field,
+.auth-card .password-field {
+    -fx-background-color: #10121b;
+    -fx-background-radius: 9px;
+    -fx-border-color: #343241;
+    -fx-border-radius: 9px;
+    -fx-padding: 11px 12px;
+    -fx-text-fill: #f1eef8;
+    -fx-prompt-text-fill: #706c7d;
+    -fx-font-size: 12px;
+}
+
+.auth-card .text-field:focused,
+.auth-card .password-field:focused {
+    -fx-border-color: #8e73ca;
+    -fx-effect: dropshadow(gaussian, rgba(155, 126, 224, 0.19), 8, 0.1, 0, 0);
+}
+
+.auth-feedback {
+    -fx-font-size: 11px;
+    -fx-line-spacing: 2px;
+}
+
+.auth-error {
+    -fx-text-fill: #ef9eae;
+}
+
+.auth-progress {
+    -fx-text-fill: #c6b5f2;
+}
+
+.auth-link-button {
+    -fx-background-color: transparent;
+    -fx-padding: 4px 0;
+    -fx-text-fill: #c1aaff;
+    -fx-font-size: 11px;
+    -fx-cursor: hand;
+}
+
+.auth-link-button:hover {
+    -fx-text-fill: #e0d2ff;
+    -fx-underline: true;
+}
+
+.auth-note {
+    -fx-text-fill: #817d8d;
+    -fx-font-size: 10px;
+    -fx-line-spacing: 2px;
+    -fx-text-alignment: center;
+}
+
+.account-name {
+    -fx-text-fill: #d6d1e1;
+    -fx-font-size: 10px;
+    -fx-font-weight: 600;
+}
+
+.sign-out-button {
+    -fx-background-color: transparent;
+    -fx-background-radius: 8px;
+    -fx-border-color: #393545;
+    -fx-border-radius: 8px;
+    -fx-padding: 8px 10px;
+    -fx-text-fill: #aaa6b7;
+    -fx-font-size: 10px;
+    -fx-cursor: hand;
+}
+
+.sign-out-button:hover {
+    -fx-background-color: #25212f;
+    -fx-border-color: #62517e;
+    -fx-text-fill: #e4d9ff;
+}

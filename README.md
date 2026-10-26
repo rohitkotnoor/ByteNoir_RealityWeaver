@@ -14,16 +14,16 @@ JavaFX 21.0.12 is used to match the installed Java 21 runtime. The included Mave
 From the project root, compile and package the application in PowerShell:
 
 ```powershell
-.\mvnw.cmd clean package
+.\run.ps1 clean package
 ```
 
 Launch the desktop application with the JavaFX Maven plugin:
 
 ```powershell
-.\mvnw.cmd javafx:run
+.\run.ps1
 ```
 
-On macOS or Linux, use `./mvnw` in place of `mvnw.cmd`. On first use, the wrapper downloads Maven and Maven fetches the project dependencies and plugins. The first launch opens account registration; later launches open sign-in. Local accounts are stored in `~/.realityweaver/accounts.json` with salted PBKDF2-HMAC-SHA256 password verifiers. This app does not connect to an online identity provider or provide password recovery or account sync. In the app, open **Wallpapers → Find online**, choose Openverse, Wikimedia Commons, or Wallhaven, then search for a destination or topic. **Trending** shows Wallhaven's safe-for-work monthly toplist. Select a result to preview it, then choose **Download to library** to save a copy. Search requires an internet connection. Check each linked source page for reuse terms and attribution; the app keeps the displayed creator, license, and source link with downloaded entries. Wallpaper references and favorites are saved in local user preferences; imported source images stay where they are. Applying a wallpaper is currently supported on Windows. Created world drafts currently live in memory for the duration of the application session.
+On macOS or Linux, use `./mvnw clean package` to build and `./mvnw javafx:run` to launch. On first use, Maven downloads the required plugins and project dependencies. The Windows launcher keeps Maven's cache and the app's local account data inside ignored project folders so it works when the system Java home is misconfigured. The first launch opens account registration; later launches open sign-in. Local accounts on macOS and Linux are stored in `~/.realityweaver/accounts.json`; Windows runs launched by `run.ps1` store them in ignored `.runtime-home/.realityweaver/accounts.json`. Accounts use salted PBKDF2-HMAC-SHA256 password verifiers. This app does not connect to an online identity provider or provide password recovery or account sync. In the app, open **Wallpapers → Find online**, choose Openverse, Wikimedia Commons, or Wallhaven, then search for a destination or topic. **Trending** shows Wallhaven's safe-for-work monthly toplist. Select a result to preview it, then choose **Download to library** to save a copy. Search requires an internet connection. Check each linked source page for reuse terms and attribution; the app keeps the displayed creator, license, and source link with downloaded entries. Wallpaper references and favorites are saved in local user preferences; imported source images stay where they are. Applying a wallpaper is currently supported on Windows. Created world drafts currently live in memory for the duration of the application session.
 
 ## Project layout
 
@@ -39,7 +39,9 @@ On macOS or Linux, use `./mvnw` in place of `mvnw.cmd`. On first use, the wrappe
 | `src/main/java/com/realityweaver/ui/AuthPageSupport.java` | Shares the layout and styling helpers used by the authentication pages. |
 | `src/main/java/com/realityweaver/ui/LoginView.java` | Provides the local sign-in page and navigation to registration. |
 | `src/main/java/com/realityweaver/ui/RegisterView.java` | Provides the local registration page and navigation to sign-in. |
-| `src/main/java/com/realityweaver/ui/DashboardView.java` | Builds the authenticated dashboard, empty state, starter prompts, and create-world interaction. |
+| `src/main/java/com/realityweaver/ui/DashboardView.java` | Builds the authenticated dashboard and opens created worlds in their workspace. |
+| `src/main/java/com/realityweaver/ui/WorldDraft.java` | Holds a world's places, characters, and story ideas for the current session. |
+| `src/main/java/com/realityweaver/ui/WorldWorkspaceView.java` | Adds and removes places, characters, and story ideas in a world. |
 | `src/main/java/com/realityweaver/ui/WallpaperStudioView.java` | Provides the library and online search tabs, wallpaper preview, favorites filter, and desktop apply interface. |
 | `src/main/java/com/realityweaver/ui/OnlineWallpaperView.java` | Searches multiple catalogs, previews selected results, shows creator/license details, and saves images into the library. |
 | `src/main/java/com/realityweaver/wallpaper/OnlineWallpaper.java` | Represents an image result with its source and reuse information. |

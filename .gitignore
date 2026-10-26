@@ -1,4 +1,7 @@
 /target/
+/.runtime-home/
+/.mvn-home/
+/.maven-cache/
 /.idea/
 *.iml
 .DS_Store

@@ -96,11 +96,16 @@ public final class DashboardView extends BorderPane {
     }
 
     private void showScreen(boolean showWallpapers) {
+        screenHost.getChildren().setAll(studioScreen, wallpaperScreen);
         studioScreen.setVisible(!showWallpapers);
         studioScreen.setManaged(!showWallpapers);
         wallpaperScreen.setVisible(showWallpapers);
         wallpaperScreen.setManaged(showWallpapers);
 
+        updateNavigation(showWallpapers);
+    }
+
+    private void updateNavigation(boolean showWallpapers) {
         studioNav.getStyleClass().remove("nav-button-selected");
         wallpaperNav.getStyleClass().remove("nav-button-selected");
         (showWallpapers ? wallpaperNav : studioNav).getStyleClass().add("nav-button-selected");
@@ -271,6 +276,7 @@ public final class DashboardView extends BorderPane {
     }
 
     private void addWorld(String name) {
+        WorldDraft world = new WorldDraft(name);
         createdWorlds++;
         worldCount.setText(createdWorlds == 1 ? "1 world" : createdWorlds + " worlds");
         if (createdWorlds == 1) {
@@ -286,15 +292,26 @@ public final class DashboardView extends BorderPane {
         details.getStyleClass().add("world-card-details");
 
         VBox copy = new VBox(5, worldName, details);
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
+        HBox.setHgrow(copy, javafx.scene.layout.Priority.ALWAYS);
         Label arrow = new Label("↗");
         arrow.getStyleClass().add("world-card-arrow");
 
-        HBox card = new HBox(14, icon, copy, spacer, arrow);
+        HBox cardContent = new HBox(14, icon, copy, arrow);
+        cardContent.setAlignment(Pos.CENTER_LEFT);
+
+        Button card = new Button();
+        card.setGraphic(cardContent);
+        card.setMaxWidth(Double.MAX_VALUE);
         card.setAlignment(Pos.CENTER_LEFT);
-        card.setPadding(new Insets(16, 20, 16, 20));
         card.getStyleClass().add("world-card");
         worldList.getChildren().add(card);
+        card.setOnAction(event -> openWorld(world));
+        openWorld(world);
+    }
+
+    private void openWorld(WorldDraft world) {
+        WorldWorkspaceView worldScreen = new WorldWorkspaceView(world, () -> showScreen(false));
+        screenHost.getChildren().setAll(worldScreen);
+        updateNavigation(false);
     }
 }

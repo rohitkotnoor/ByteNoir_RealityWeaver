@@ -5,5 +5,6 @@ module com.realityweaver {
     requires java.prefs;
     requires com.google.gson;
 
+    opens com.realityweaver.wallpaper to com.google.gson;
     exports com.realityweaver;
 }

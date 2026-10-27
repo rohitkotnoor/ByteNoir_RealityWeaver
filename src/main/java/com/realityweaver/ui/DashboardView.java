@@ -1,6 +1,15 @@
 package com.realityweaver.ui;
 
 import com.realityweaver.auth.LocalAccount;
+import com.realityweaver.wallpaper.WallpaperAutomationService;
+import com.realityweaver.wallpaper.WallpaperCollectionStore;
+import com.realityweaver.wallpaper.WallpaperLibrary;
+import com.realityweaver.wallpaper.WallpaperService;
+import javafx.animation.PauseTransition;
+import javafx.util.Duration;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import javafx.geometry.Insets;
@@ -19,26 +28,51 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
 
-/** Builds the starter dashboard and its in-memory "create world" interaction. */
+/** Builds the local workspace dashboard and its persisted world drafts. */
 public final class DashboardView extends BorderPane {
     private final LocalAccount account;
     private final Runnable onSignOut;
+    private final WallpaperAutomationService wallpaperAutomationService;
+    private final WallpaperLibrary wallpaperLibrary = new WallpaperLibrary();
+    private final WallpaperCollectionStore collectionStore = new WallpaperCollectionStore();
+    private final WorldStore worldStore = new WorldStore();
+    private final List<WorldDraft> worlds = new ArrayList<>();
+    private final WallpaperService wallpaperService = new WallpaperService();
     private final StackPane screenHost = new StackPane();
-    private final Button studioNav = new Button("Studio");
-    private final Button wallpaperNav = new Button("Wallpapers");
+    private final Button studioNav = new Button("Home");
+    private final Button wallpaperNav = new Button("Wallpaper studio");
     private final VBox worldList = new VBox(12);
     private final VBox emptyState = new VBox(12);
     private final Label worldCount = new Label("0 worlds");
-    private int createdWorlds;
+    private final Label savedWallpaperCount = new Label("0");
+    private final Label collectionCount = new Label("0");
+    private final Label favoriteCount = new Label("0");
+    private final Label automationSummary = new Label("Off");
+    private final Label lastAppliedSummary = new Label("No wallpapers applied yet");
+    private final Label worldStoreStatus = new Label("Worlds and memory notes save on this computer.");
+    private final PauseTransition worldSaveDebounce = new PauseTransition(Duration.millis(350));
+    private boolean worldStorageReadable = true;
     private Node studioScreen;
     private WallpaperStudioView wallpaperScreen;
 
-    public DashboardView(LocalAccount account, Runnable onSignOut) {
+    public DashboardView(LocalAccount account, Runnable onSignOut,
+            WallpaperAutomationService wallpaperAutomationService) {
         this.account = account;
         this.onSignOut = onSignOut;
+        this.wallpaperAutomationService = wallpaperAutomationService;
+        try {
+            worlds.addAll(worldStore.load());
+        } catch (IOException unavailable) {
+            worldStorageReadable = false;
+            worldStoreStatus.setText("Saved worlds could not be opened safely. The original file was left untouched.");
+            worldStoreStatus.getStyleClass().add("world-store-error");
+        }
+        worlds.forEach(this::watchWorldChanges);
+        worldSaveDebounce.setOnFinished(event -> saveWorlds());
         getStyleClass().add("app-shell");
         studioScreen = createScrollableDashboard();
-        wallpaperScreen = new WallpaperStudioView();
+        refreshWallpaperOverview();
+        wallpaperScreen = new WallpaperStudioView(wallpaperAutomationService);
         wallpaperScreen.setVisible(false);
         wallpaperScreen.setManaged(false);
         screenHost.getChildren().setAll(studioScreen, wallpaperScreen);
@@ -82,9 +116,14 @@ public final class DashboardView extends BorderPane {
         accountName.getStyleClass().add("account-name");
         accountName.setMaxWidth(130);
         accountName.setTextOverrun(OverrunStyle.ELLIPSIS);
-        Button signOut = new Button("Sign out");
+        boolean localWorkspace = account.email() == null || account.email().isBlank();
+        Button signOut = new Button(localWorkspace ? "Sign in" : "Sign out");
         signOut.getStyleClass().add("sign-out-button");
-        signOut.setOnAction(event -> onSignOut.run());
+        signOut.setOnAction(event -> {
+            wallpaperAutomationService.setStatusListener(null);
+            close();
+            onSignOut.run();
+        });
         HBox profile = new HBox(12, accountName, signOut);
         profile.setAlignment(Pos.CENTER);
 
@@ -103,6 +142,9 @@ public final class DashboardView extends BorderPane {
         wallpaperScreen.setManaged(showWallpapers);
 
         updateNavigation(showWallpapers);
+        if (!showWallpapers) {
+            refreshWallpaperOverview();
+        }
     }
 
     private void updateNavigation(boolean showWallpapers) {
@@ -119,6 +161,7 @@ public final class DashboardView extends BorderPane {
         content.getChildren().addAll(
                 createPageIntro(),
                 createHero(),
+                createWallpaperOverview(),
                 createWorldsSection(),
                 createPromptRow());
 
@@ -127,6 +170,77 @@ public final class DashboardView extends BorderPane {
         scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         scrollPane.getStyleClass().add("content-scroll");
         return scrollPane;
+    }
+
+    private VBox createWallpaperOverview() {
+        Label title = new Label("Wallpaper studio overview");
+        title.getStyleClass().add("section-title");
+        Button browse = new Button("Open wallpaper studio");
+        browse.getStyleClass().add("quiet-button");
+        browse.setOnAction(event -> openWallpaperSection("My Wallpapers"));
+        HBox header = new HBox(title, browse);
+        header.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(title, javafx.scene.layout.Priority.ALWAYS);
+
+        HBox stats = new HBox(10,
+                dashboardStat("Saved wallpapers", savedWallpaperCount),
+                dashboardStat("Collections", collectionCount),
+                dashboardStat("Favorites", favoriteCount),
+                dashboardStat("Automation", automationSummary));
+        Label recentLabel = new Label();
+        recentLabel.getStyleClass().add("recent-wallpaper-empty");
+        wallpaperOverviewRecent = recentLabel;
+        HBox quickActions = new HBox(8,
+                wallpaperQuickAction("Discover", "Discover"),
+                wallpaperQuickAction("My wallpapers", "My Wallpapers"),
+                wallpaperQuickAction("Collections", "Collections"),
+                wallpaperQuickAction("Automation", "Automation"));
+        quickActions.setAlignment(Pos.CENTER_LEFT);
+        VBox overview = new VBox(11, header, stats, recentLabel, quickActions);
+        overview.getStyleClass().add("dashboard-wallpaper-overview");
+        return overview;
+    }
+
+    private Button wallpaperQuickAction(String label, String section) {
+        Button action = new Button(label);
+        action.getStyleClass().add("quiet-button");
+        action.setOnAction(event -> openWallpaperSection(section));
+        return action;
+    }
+
+    private void openWallpaperSection(String section) {
+        showScreen(true);
+        wallpaperScreen.showSection(section);
+    }
+
+    private Label wallpaperOverviewRecent;
+
+    private VBox dashboardStat(String title, Label value) {
+        Label label = new Label(title);
+        label.getStyleClass().add("dashboard-stat-label");
+        value.getStyleClass().add("dashboard-stat-value");
+        VBox card = new VBox(5, value, label);
+        card.getStyleClass().add("dashboard-stat-card");
+        HBox.setHgrow(card, javafx.scene.layout.Priority.ALWAYS);
+        card.setMaxWidth(Double.MAX_VALUE);
+        return card;
+    }
+
+    private void refreshWallpaperOverview() {
+        List<java.nio.file.Path> images = wallpaperLibrary.load();
+        savedWallpaperCount.setText(Integer.toString(images.size()));
+        favoriteCount.setText(Long.toString(images.stream().filter(wallpaperLibrary::isFavorite).count()));
+        try {
+            collectionCount.setText(Integer.toString(collectionStore.list().size()));
+        } catch (IOException unavailable) {
+            collectionCount.setText("—");
+        }
+        automationSummary.setText(wallpaperAutomationService.isEnabled() ? "On" : "Off");
+        if (wallpaperOverviewRecent != null) {
+            List<java.nio.file.Path> applied = wallpaperService.recentApplied();
+            wallpaperOverviewRecent.setText(applied.isEmpty() ? "Last applied by RealityWeaver: none yet"
+                    : "Last applied by RealityWeaver: " + applied.getFirst().getFileName());
+        }
     }
 
     private VBox createPageIntro() {
@@ -228,7 +342,9 @@ public final class DashboardView extends BorderPane {
         emptyState.getStyleClass().add("empty-state");
 
         worldList.getStyleClass().add("world-list");
-        worldList.getChildren().add(emptyState);
+        worldStoreStatus.setWrapText(true);
+        worldStoreStatus.getStyleClass().add("world-item-empty");
+        refreshWorldCards();
 
         return new VBox(14, sectionHeader, worldList);
     }
@@ -276,19 +392,34 @@ public final class DashboardView extends BorderPane {
     }
 
     private void addWorld(String name) {
-        WorldDraft world = new WorldDraft(name);
-        createdWorlds++;
-        worldCount.setText(createdWorlds == 1 ? "1 world" : createdWorlds + " worlds");
-        if (createdWorlds == 1) {
-            emptyState.setVisible(false);
-            emptyState.setManaged(false);
+        if (!worldStorageReadable) {
+            showWorldStorageError("Saved worlds could not be opened. Resolve the saved file issue before adding a world.");
+            return;
         }
+        if (worlds.stream().anyMatch(world -> world.name().equalsIgnoreCase(name))) {
+            showAlert("A world with that name already exists.");
+            return;
+        }
+        WorldDraft world = new WorldDraft(name);
+        worlds.add(world);
+        try {
+            worldStore.save(worlds);
+        } catch (IOException | IllegalArgumentException failure) {
+            worlds.remove(world);
+            showWorldStorageError("Could not save this world: " + safeMessage(failure));
+            return;
+        }
+        watchWorldChanges(world);
+        refreshWorldCards();
+        openWorld(world);
+    }
 
+    private Button createWorldCard(WorldDraft world) {
         Label icon = new Label("✦");
         icon.getStyleClass().add("world-card-icon");
-        Label worldName = new Label(name);
+        Label worldName = new Label(world.name());
         worldName.getStyleClass().add("world-card-title");
-        Label details = new Label("Created just now  ·  World draft");
+        Label details = new Label("Saved on this computer");
         details.getStyleClass().add("world-card-details");
 
         VBox copy = new VBox(5, worldName, details);
@@ -304,14 +435,74 @@ public final class DashboardView extends BorderPane {
         card.setMaxWidth(Double.MAX_VALUE);
         card.setAlignment(Pos.CENTER_LEFT);
         card.getStyleClass().add("world-card");
-        worldList.getChildren().add(card);
         card.setOnAction(event -> openWorld(world));
-        openWorld(world);
+        return card;
+    }
+
+    private void refreshWorldCards() {
+        worldCount.setText(worlds.size() == 1 ? "1 world" : worlds.size() + " worlds");
+        List<Node> children = new ArrayList<>();
+        if (worlds.isEmpty()) {
+            children.add(emptyState);
+        }
+        children.add(worldStoreStatus);
+        worlds.stream().map(this::createWorldCard).forEach(children::add);
+        worldList.getChildren().setAll(children);
+    }
+
+    private void watchWorldChanges(WorldDraft world) {
+        world.setOnChange(() -> {
+            if (worldStorageReadable) {
+                worldSaveDebounce.playFromStart();
+            }
+        });
+    }
+
+    private void saveWorlds() {
+        if (!worldStorageReadable) {
+            return;
+        }
+        try {
+            worldStore.save(worlds);
+            worldStoreStatus.setText("Worlds and memory notes save on this computer.");
+            worldStoreStatus.getStyleClass().remove("world-store-error");
+        } catch (IOException | IllegalArgumentException failure) {
+            showWorldStorageError("Could not save world changes: " + safeMessage(failure));
+        }
+    }
+
+    private void showWorldStorageError(String message) {
+        worldStoreStatus.setText(message);
+        if (!worldStoreStatus.getStyleClass().contains("world-store-error")) {
+            worldStoreStatus.getStyleClass().add("world-store-error");
+        }
+    }
+
+    private String safeMessage(Throwable failure) {
+        return failure.getMessage() == null || failure.getMessage().isBlank()
+                ? "Check the local storage folder and try again." : failure.getMessage();
+    }
+
+    private void showAlert(String message) {
+        javafx.scene.control.Alert alert = new javafx.scene.control.Alert(
+                javafx.scene.control.Alert.AlertType.INFORMATION);
+        alert.initOwner(getScene().getWindow());
+        alert.setTitle("Worlds");
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
     }
 
     private void openWorld(WorldDraft world) {
-        WorldWorkspaceView worldScreen = new WorldWorkspaceView(world, () -> showScreen(false));
+        WorldWorkspaceView worldScreen = new WorldWorkspaceView(world, () -> showScreen(false),
+                wallpaperAutomationService::recordManualOverride);
         screenHost.getChildren().setAll(worldScreen);
         updateNavigation(false);
+    }
+
+    public void close() {
+        worldSaveDebounce.stop();
+        saveWorlds();
+        wallpaperScreen.close();
     }
 }

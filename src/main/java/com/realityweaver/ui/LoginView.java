@@ -21,6 +21,7 @@ public final class LoginView extends BorderPane {
     private final AuthService authService;
     private final Consumer<LocalAccount> onAuthenticated;
     private final Runnable onRegister;
+    private final Runnable onContinueLocally;
     private final VBox card = AuthPageSupport.createCard();
     private final TextField email = new TextField();
     private final PasswordField password = new PasswordField();
@@ -28,9 +29,15 @@ public final class LoginView extends BorderPane {
     private final Button signIn = new Button("Sign in");
 
     public LoginView(AuthService authService, Consumer<LocalAccount> onAuthenticated, Runnable onRegister) {
+        this(authService, onAuthenticated, onRegister, () -> { });
+    }
+
+    public LoginView(AuthService authService, Consumer<LocalAccount> onAuthenticated, Runnable onRegister,
+            Runnable onContinueLocally) {
         this.authService = authService;
         this.onAuthenticated = onAuthenticated;
         this.onRegister = onRegister;
+        this.onContinueLocally = onContinueLocally;
         buildPage();
     }
 
@@ -61,13 +68,17 @@ public final class LoginView extends BorderPane {
         registerLink.getStyleClass().add("auth-link-button");
         registerLink.setOnAction(event -> onRegister.run());
 
-        Label localNote = new Label("Your account is stored on this device.");
+        Button localWorkspace = new Button("Continue without an account");
+        localWorkspace.getStyleClass().add("auth-link-button");
+        localWorkspace.setOnAction(event -> onContinueLocally.run());
+
+        Label localNote = new Label("Accounts are optional and stored on this device.");
         localNote.getStyleClass().add("auth-note");
         localNote.setWrapText(true);
 
         card.getChildren().setAll(
                 AuthPageSupport.eyebrow("YOUR CREATIVE SPACE"), title, description,
-                emailField, passwordField, feedback, signIn, registerLink, localNote);
+                emailField, passwordField, feedback, signIn, registerLink, localWorkspace, localNote);
         AuthPageSupport.configurePage(this, card);
     }
 

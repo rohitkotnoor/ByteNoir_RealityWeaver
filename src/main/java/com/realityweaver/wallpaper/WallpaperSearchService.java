@@ -34,22 +34,38 @@ public final class WallpaperSearchService {
 
     public List<OnlineWallpaper> search(String query, WallpaperSource source)
             throws IOException, InterruptedException {
+        return search(query, source, 1);
+    }
+
+    public List<OnlineWallpaper> search(String query, WallpaperSource source, int page)
+            throws IOException, InterruptedException {
+        if (page < 1 || page > 200) {
+            throw new IllegalArgumentException("Search page is outside the supported range.");
+        }
         return switch (source) {
-            case OPENVERSE -> searchOpenverse(query);
-            case WIKIMEDIA_COMMONS -> searchCommons(query);
-            case WALLHAVEN -> searchWallhaven(query, false);
+            case OPENVERSE -> searchOpenverse(query, page);
+            case WIKIMEDIA_COMMONS -> searchCommons(query, page);
+            case WALLHAVEN -> searchWallhaven(query, false, page);
         };
     }
 
     public List<OnlineWallpaper> trending() throws IOException, InterruptedException {
-        return searchWallhaven("", true);
+        return trending(1);
     }
 
-    private List<OnlineWallpaper> searchCommons(String query) throws IOException, InterruptedException {
+    public List<OnlineWallpaper> trending(int page) throws IOException, InterruptedException {
+        if (page < 1 || page > 200) {
+            throw new IllegalArgumentException("Search page is outside the supported range.");
+        }
+        return searchWallhaven("", true, page);
+    }
+
+    private List<OnlineWallpaper> searchCommons(String query, int page) throws IOException, InterruptedException {
         String search = "filetype:bitmap " + query.strip();
         String encoded = URLEncoder.encode(search, StandardCharsets.UTF_8);
         URI requestUri = URI.create(COMMONS_API
                 + "?action=query&generator=search&gsrnamespace=6&gsrlimit=24&gsrsearch=" + encoded
+                + "&gsroffset=" + ((page - 1) * 24)
                 + "&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata"
                 + "&iiextmetadatafilter=Artist%7CLicenseShortName%7CLicense"
                 + "&iiurlwidth=720&format=json&formatversion=2");
@@ -79,11 +95,11 @@ public final class WallpaperSearchService {
             List<OnlineWallpaper> results = new ArrayList<>();
             JsonArray pages = queryObject.getAsJsonArray("pages");
             for (JsonElement pageElement : pages) {
-                JsonObject page = pageElement.getAsJsonObject();
-                if (!page.has("imageinfo") || !page.get("imageinfo").isJsonArray()) {
+                JsonObject pageResult = pageElement.getAsJsonObject();
+                if (!pageResult.has("imageinfo") || !pageResult.get("imageinfo").isJsonArray()) {
                     continue;
                 }
-                JsonArray imageInfoArray = page.getAsJsonArray("imageinfo");
+                JsonArray imageInfoArray = pageResult.getAsJsonArray("imageinfo");
                 if (imageInfoArray.isEmpty()) {
                     continue;
                 }
@@ -103,7 +119,7 @@ public final class WallpaperSearchService {
                 JsonObject metadata = info.has("extmetadata") && info.get("extmetadata").isJsonObject()
                         ? info.getAsJsonObject("extmetadata")
                         : new JsonObject();
-                String rawTitle = stringValue(page, "title");
+                String rawTitle = stringValue(pageResult, "title");
                 String title = rawTitle.startsWith("File:") ? rawTitle.substring("File:".length()) : rawTitle;
 
                 results.add(new OnlineWallpaper(
@@ -124,9 +140,9 @@ public final class WallpaperSearchService {
         }
     }
 
-    private List<OnlineWallpaper> searchOpenverse(String query) throws IOException, InterruptedException {
+    private List<OnlineWallpaper> searchOpenverse(String query, int page) throws IOException, InterruptedException {
         String encoded = URLEncoder.encode(query.strip(), StandardCharsets.UTF_8);
-        URI requestUri = URI.create(OPENVERSE_API + "?q=" + encoded
+        URI requestUri = URI.create(OPENVERSE_API + "?q=" + encoded + "&page=" + page
                 + "&page_size=24&extension=jpg%2Cjpeg%2Cpng%2Cgif%2Cbmp");
         JsonObject root = getJson(requestUri, "Openverse");
         JsonArray items = root.has("results") && root.get("results").isJsonArray()
@@ -164,12 +180,12 @@ public final class WallpaperSearchService {
         return List.copyOf(results);
     }
 
-    private List<OnlineWallpaper> searchWallhaven(String query, boolean trending)
+    private List<OnlineWallpaper> searchWallhaven(String query, boolean trending, int page)
             throws IOException, InterruptedException {
         StringBuilder requestUrl = new StringBuilder(WALLHAVEN_API)
                 .append("?categories=100&purity=100&sorting=")
                 .append(trending ? "toplist" : "relevance")
-                .append("&order=desc&atleast=1920x1080&page=1");
+                .append("&order=desc&page=").append(page);
         if (trending) {
             requestUrl.append("&topRange=1M");
         }
@@ -235,11 +251,15 @@ public final class WallpaperSearchService {
                 .GET()
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IOException(source + " returned HTTP " + response.statusCode() + ".");
+        return parseJsonResponse(response.statusCode(), response.body(), source);
+    }
+
+    static JsonObject parseJsonResponse(int statusCode, String body, String source) throws IOException {
+        if (statusCode < 200 || statusCode >= 300) {
+            throw new IOException(source + " returned HTTP " + statusCode + ".");
         }
         try {
-            return JsonParser.parseString(response.body()).getAsJsonObject();
+            return JsonParser.parseString(body).getAsJsonObject();
         } catch (RuntimeException parseFailure) {
             throw new IOException(source + " returned an unexpected search response.", parseFailure);
         }

@@ -64,4 +64,11 @@ final class WallpaperSearchServiceTest {
                 result.fileUri().toString());
         assertEquals("https://www.artic.edu/artworks/27992", result.descriptionUri().toString());
     }
+
+    @Test
+    void routesAnimeSearchesToWallhavensSafeAnimeCatalog() {
+        assertEquals("010", WallpaperSearchService.wallhavenCategoriesFor("Japanese anime wallpaper"));
+        assertEquals("010", WallpaperSearchService.wallhavenCategoriesFor("Manga skyline"));
+        assertEquals("100", WallpaperSearchService.wallhavenCategoriesFor("GTA 6 4K"));
+    }
 }

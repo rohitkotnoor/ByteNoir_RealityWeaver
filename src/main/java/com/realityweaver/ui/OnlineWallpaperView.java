@@ -39,7 +39,9 @@ import javafx.stage.FileChooser;
 /** Searches multiple image catalogs and saves selected results into the local wallpaper library. */
 public final class OnlineWallpaperView extends VBox {
     private static final List<String> SEARCH_CATEGORIES = List.of(
-            "Nature", "City", "Architecture", "Space", "Fantasy", "Ocean", "Forest", "Desert");
+            "Nature", "City", "Architecture", "Space", "Fantasy", "Ocean", "Forest", "Desert",
+            "Japanese anime", "Movie superstars", "Fashion models", "GTA 6 wallpaper",
+            "Gods & mythology", "4K HD desktop");
 
     private final WallpaperSearchService searchService = new WallpaperSearchService();
     private final WallpaperLibrary library = new WallpaperLibrary();
@@ -56,6 +58,7 @@ public final class OnlineWallpaperView extends VBox {
     private final ComboBox<WallpaperSource> sourceSelector = new ComboBox<>();
     private final ComboBox<String> searchCategory = new ComboBox<>();
     private final ComboBox<String> orientationFilter = new ComboBox<>();
+    private final ComboBox<String> resolutionFilter = new ComboBox<>();
     private final Button searchButton = new Button("Search");
     private final Button trendingButton = new Button("Trending");
     private final Label statusLabel = new Label("Search for a destination or topic, or browse trending wallpapers.");
@@ -104,7 +107,7 @@ public final class OnlineWallpaperView extends VBox {
         sourceSelector.setPrefWidth(205);
         sourceSelector.getStyleClass().add("online-source-selector");
 
-        searchField.setPromptText("Try Kyoto, Iceland, mountains, fantasy city, or architecture");
+        searchField.setPromptText("Try anime, GTA 6, movie superstars, gods, Kyoto, or mountains");
         searchField.setOnAction(event -> search());
         HBox.setHgrow(searchField, Priority.ALWAYS);
 
@@ -131,7 +134,12 @@ public final class OnlineWallpaperView extends VBox {
         categoriesLabel.getStyleClass().add("online-result-details");
         categoriesRow.getChildren().add(categoriesLabel);
         for (String category : SEARCH_CATEGORIES) {
-            categoriesRow.getChildren().add(createSuggestionButton(category));
+            WallpaperSource suggestedSource = category.equals("Japanese anime")
+                    || category.equals("Movie superstars") || category.equals("Fashion models")
+                    || category.equals("GTA 6 wallpaper") || category.equals("Gods & mythology")
+                    || category.equals("4K HD desktop")
+                    ? WallpaperSource.WALLHAVEN : null;
+            categoriesRow.getChildren().add(createSuggestionButton(category, suggestedSource));
         }
 
         VBox row = new VBox(8, placesRow, categoriesRow);
@@ -140,10 +148,17 @@ public final class OnlineWallpaperView extends VBox {
     }
 
     private Button createSuggestionButton(String value) {
+        return createSuggestionButton(value, null);
+    }
+
+    private Button createSuggestionButton(String value, WallpaperSource suggestedSource) {
         Button suggestion = new Button(value);
         suggestion.getStyleClass().add("quiet-button");
         suggestion.setOnAction(event -> {
             searchField.setText(value);
+            if (suggestedSource != null) {
+                sourceSelector.setValue(suggestedSource);
+            }
             search();
         });
         return suggestion;
@@ -151,7 +166,7 @@ public final class OnlineWallpaperView extends VBox {
 
     private Label createSourceNote() {
         Label note = new Label(
-                "Search Openverse, Commons, Wallhaven, NASA Images, or public-domain Art Institute works. Review each source page for reuse terms and attribution.");
+                "Wallhaven is set to safe results and is recommended for anime, movie superstars, models, gaming, GTA 6, gods, and 4K HD searches. Openverse, Commons, NASA Images, and public-domain art are available too.");
         note.setWrapText(true);
         note.getStyleClass().add("commons-note");
         return note;
@@ -172,7 +187,9 @@ public final class OnlineWallpaperView extends VBox {
         resultsHeader.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(resultsTitle, Priority.ALWAYS);
 
-        searchCategory.getItems().setAll("Any topic", "Nature", "Architecture", "Space", "Games", "Animals", "Vehicles");
+        searchCategory.getItems().setAll("Any topic", "Nature", "Architecture", "Space", "Japanese anime",
+                "Movie superstars", "Fashion models", "Gaming", "GTA 6 wallpaper",
+                "Gods & mythology", "4K HD desktop");
         searchCategory.setValue(AppSettings.defaultWallpaperTopic());
         searchCategory.setPromptText("Topic");
         searchCategory.getStyleClass().add("online-source-selector");
@@ -185,8 +202,12 @@ public final class OnlineWallpaperView extends VBox {
         orientationFilter.setValue("Any orientation");
         orientationFilter.getStyleClass().add("online-source-selector");
         orientationFilter.setOnAction(event -> renderResults());
+        resolutionFilter.getItems().setAll("Any resolution", "HD (1920px+)", "4K (3840px+)");
+        resolutionFilter.setValue("Any resolution");
+        resolutionFilter.getStyleClass().add("online-source-selector");
+        resolutionFilter.setOnAction(event -> renderResults());
         HBox filters = new HBox(8, new Label("Topic"), searchCategory,
-                new Label("Orientation"), orientationFilter);
+                new Label("Orientation"), orientationFilter, new Label("Resolution"), resolutionFilter);
         filters.setAlignment(Pos.CENTER_LEFT);
 
         resultGrid.setPrefWrapLength(760);
@@ -361,6 +382,7 @@ public final class OnlineWallpaperView extends VBox {
         resultGrid.getChildren().clear();
         List<OnlineWallpaper> visible = results.stream()
                 .filter(this::matchesOrientation)
+                .filter(this::matchesResolution)
                 .toList();
         resultCount.setText(results.isEmpty() ? "" : visible.size() + " shown · " + results.size() + " loaded");
         if (results.isEmpty()) {
@@ -437,6 +459,19 @@ public final class OnlineWallpaperView extends VBox {
             case "Landscape" -> wallpaper.width() > wallpaper.height();
             case "Portrait" -> wallpaper.height() > wallpaper.width();
             case "Square" -> wallpaper.width() == wallpaper.height();
+            default -> true;
+        };
+    }
+
+    private boolean matchesResolution(OnlineWallpaper wallpaper) {
+        String filter = resolutionFilter.getValue();
+        if (filter == null || filter.equals("Any resolution")) {
+            return true;
+        }
+        int longestEdge = Math.max(wallpaper.width(), wallpaper.height());
+        return switch (filter) {
+            case "HD (1920px+)" -> longestEdge >= 1920;
+            case "4K (3840px+)" -> longestEdge >= 3840;
             default -> true;
         };
     }

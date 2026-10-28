@@ -20,7 +20,7 @@ The first launch opens a short setup wizard. Choose a starting wallpaper topic a
 
 The Home screen links to wallpaper discovery, your library, collections, and automation. In the wallpaper studio:
 
-- **Discover** searches supported public image libraries, shows image previews and available creator/license/source details, and supports loading more results.
+- **Discover** searches supported public image libraries, shows image previews and available creator/license/source details, and supports loading more results. Quick searches include Japanese anime, movie superstars, fashion models, GTA 6, gods and mythology, and 4K HD desktop wallpapers.
 - **My Wallpapers** imports local images, previews them, organizes favorites by category, and shows recently opened wallpapers.
 - **Collections** creates, renames, and deletes named collections; adds or removes images; marks favorites; shuffles and cycles through a collection; and imports or exports JSON manifests and ZIP archives.
 - **Automation** manages daily time rules, weather rules, local `.ics` calendar rules, and the Windows Classic Outlook calendar where available. Automation runs while RealityWeaver is running, including in the system tray where the desktop supports it.

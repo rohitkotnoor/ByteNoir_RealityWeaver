@@ -190,7 +190,7 @@ public final class WallpaperSearchService {
     private List<OnlineWallpaper> searchWallhaven(String query, boolean trending, int page)
             throws IOException, InterruptedException {
         StringBuilder requestUrl = new StringBuilder(WALLHAVEN_API)
-                .append("?categories=100&purity=100&sorting=")
+                .append("?categories=").append(wallhavenCategoriesFor(query)).append("&purity=100&sorting=")
                 .append(trending ? "toplist" : "relevance")
                 .append("&order=desc&page=").append(page);
         if (trending) {
@@ -249,6 +249,13 @@ public final class WallpaperSearchService {
                     trending ? "Wallhaven · monthly toplist" : "Wallhaven"));
         }
         return List.copyOf(results);
+    }
+
+    /** Wallhaven uses a separate safe category for anime; all other searches use its general catalog. */
+    static String wallhavenCategoriesFor(String query) {
+        String normalized = query == null ? "" : query.toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("anime") || normalized.contains("manga") || normalized.contains("japanese animation")
+                ? "010" : "100";
     }
 
     private List<OnlineWallpaper> searchNasa(String query, int page) throws IOException, InterruptedException {

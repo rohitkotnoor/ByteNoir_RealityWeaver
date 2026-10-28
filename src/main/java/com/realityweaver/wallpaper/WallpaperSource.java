@@ -4,7 +4,9 @@ package com.realityweaver.wallpaper;
 public enum WallpaperSource {
     OPENVERSE("Openverse · many libraries"),
     WIKIMEDIA_COMMONS("Wikimedia Commons"),
-    WALLHAVEN("Wallhaven");
+    WALLHAVEN("Wallhaven"),
+    NASA_IMAGES("NASA Images · space"),
+    ART_INSTITUTE("Art Institute of Chicago · public domain");
 
     private final String label;
 

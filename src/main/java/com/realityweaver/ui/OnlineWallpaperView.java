@@ -29,7 +29,6 @@ import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
-import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.Priority;
@@ -152,7 +151,7 @@ public final class OnlineWallpaperView extends VBox {
 
     private Label createSourceNote() {
         Label note = new Label(
-                "Openverse searches many image libraries; Commons and Wallhaven are available too. Review each source page for reuse terms and attribution.");
+                "Search Openverse, Commons, Wallhaven, NASA Images, or public-domain Art Institute works. Review each source page for reuse terms and attribution.");
         note.setWrapText(true);
         note.getStyleClass().add("commons-note");
         return note;
@@ -392,7 +391,10 @@ public final class OnlineWallpaperView extends VBox {
             title.setWrapText(true);
             title.getStyleClass().add("wallpaper-item-name");
             title.setMaxHeight(42);
-            String detail = wallpaper.sourceName() + " · " + wallpaper.width() + " × " + wallpaper.height();
+            String detail = wallpaper.sourceName();
+            if (wallpaper.width() > 0 && wallpaper.height() > 0) {
+                detail += " · " + wallpaper.width() + " × " + wallpaper.height();
+            }
             if (!wallpaper.license().isBlank()) {
                 detail += " · " + wallpaper.license();
             }

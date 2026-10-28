@@ -46,6 +46,10 @@ public final class RealityWeaverApplication extends Application {
         stage.setMinHeight(660);
         stage.setScene(scene);
         installSystemTray(stage);
+        stage.setOnCloseRequest(event -> {
+            event.consume();
+            Platform.exit();
+        });
         stage.show();
     }
 
@@ -74,9 +78,11 @@ public final class RealityWeaverApplication extends Application {
         try {
             SystemTray.getSystemTray().add(trayIcon);
             Platform.setImplicitExit(false);
-            stage.setOnCloseRequest(event -> {
-                event.consume();
-                stage.hide();
+            stage.iconifiedProperty().addListener((observable, wasIconified, isIconified) -> {
+                if (isIconified && trayIcon != null) {
+                    trayIcon.displayMessage("RealityWeaver", "RealityWeaver is still available from the taskbar or tray.",
+                            TrayIcon.MessageType.INFO);
+                }
             });
         } catch (AWTException | SecurityException unavailable) {
             trayIcon = null;

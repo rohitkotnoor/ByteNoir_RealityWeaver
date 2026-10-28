@@ -24,6 +24,11 @@ public final class WallpaperSearchService {
     private static final String COMMONS_API = "https://commons.wikimedia.org/w/api.php";
     private static final String OPENVERSE_API = "https://api.openverse.org/v1/images/";
     private static final String WALLHAVEN_API = "https://wallhaven.cc/api/v1/search";
+    private static final String NASA_IMAGES_API = "https://images-api.nasa.gov/search";
+    private static final String NASA_DETAILS_URL = "https://images.nasa.gov/details/";
+    private static final String NASA_ASSETS_URL = "https://images-assets.nasa.gov/image/";
+    private static final String ART_INSTITUTE_API = "https://api.artic.edu/api/v1/artworks/search";
+    private static final String ART_INSTITUTE_ARTWORK_URL = "https://www.artic.edu/artworks/";
     private static final String USER_AGENT = "RealityWeaver/1.0 (JavaFX wallpaper discovery)";
     private static final long MAX_IMAGE_BYTES = 100L * 1024 * 1024;
 
@@ -46,6 +51,8 @@ public final class WallpaperSearchService {
             case OPENVERSE -> searchOpenverse(query, page);
             case WIKIMEDIA_COMMONS -> searchCommons(query, page);
             case WALLHAVEN -> searchWallhaven(query, false, page);
+            case NASA_IMAGES -> searchNasa(query, page);
+            case ART_INSTITUTE -> searchArtInstitute(query, page);
         };
     }
 
@@ -244,6 +251,111 @@ public final class WallpaperSearchService {
         return List.copyOf(results);
     }
 
+    private List<OnlineWallpaper> searchNasa(String query, int page) throws IOException, InterruptedException {
+        String encoded = URLEncoder.encode(query.strip(), StandardCharsets.UTF_8);
+        JsonObject root = getJson(URI.create(NASA_IMAGES_API + "?q=" + encoded
+                + "&media_type=image&page=" + page + "&page_size=24"), "NASA Images");
+        return parseNasaResponse(root);
+    }
+
+    /** Converts NASA's public image-library search response into downloadable image records. */
+    static List<OnlineWallpaper> parseNasaResponse(JsonObject root) {
+        JsonObject collection = root != null && root.has("collection") && root.get("collection").isJsonObject()
+                ? root.getAsJsonObject("collection") : null;
+        JsonArray items = collection != null && collection.has("items") && collection.get("items").isJsonArray()
+                ? collection.getAsJsonArray("items") : new JsonArray();
+        List<OnlineWallpaper> results = new ArrayList<>();
+        for (JsonElement element : items) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            JsonArray data = item.has("data") && item.get("data").isJsonArray()
+                    ? item.getAsJsonArray("data") : new JsonArray();
+            if (data.isEmpty() || !data.get(0).isJsonObject()) {
+                continue;
+            }
+            JsonObject metadata = data.get(0).getAsJsonObject();
+            if (!"image".equalsIgnoreCase(stringValue(metadata, "media_type"))) {
+                continue;
+            }
+            String nasaId = stringValue(metadata, "nasa_id");
+            if (nasaId.isBlank()) {
+                continue;
+            }
+            String thumbnail = nasaThumbnail(item);
+            if (thumbnail.isBlank()) {
+                continue;
+            }
+            String assetId = encodePathSegment(nasaId);
+            String fullImage = NASA_ASSETS_URL + assetId + "/" + assetId + "~large.jpg";
+            String creator = firstNonBlank(stringValue(metadata, "photographer"),
+                    firstNonBlank(stringValue(metadata, "secondary_creator"), stringValue(metadata, "center")));
+            results.add(new OnlineWallpaper(
+                    firstNonBlank(stringValue(metadata, "title"), "NASA image " + nasaId),
+                    URI.create(thumbnail),
+                    URI.create(fullImage),
+                    URI.create(NASA_DETAILS_URL + assetId),
+                    creator,
+                    "NASA media usage guidelines",
+                    "image/jpeg",
+                    0,
+                    0,
+                    "NASA Images"));
+        }
+        return List.copyOf(results);
+    }
+
+    private List<OnlineWallpaper> searchArtInstitute(String query, int page)
+            throws IOException, InterruptedException {
+        String encoded = URLEncoder.encode(query.strip(), StandardCharsets.UTF_8);
+        URI requestUri = URI.create(ART_INSTITUTE_API + "?q=" + encoded + "&page=" + page
+                + "&limit=24&fields=id%2Ctitle%2Cimage_id%2Cartist_title%2Cdate_display%2Cis_public_domain"
+                + "&query%5Bterm%5D%5Bis_public_domain%5D=true");
+        JsonObject root = getJson(requestUri, "Art Institute of Chicago");
+        return parseArtInstituteResponse(root);
+    }
+
+    /** Keeps only public-domain Art Institute results that expose an IIIF image identifier. */
+    static List<OnlineWallpaper> parseArtInstituteResponse(JsonObject root) {
+        JsonArray items = root != null && root.has("data") && root.get("data").isJsonArray()
+                ? root.getAsJsonArray("data") : new JsonArray();
+        JsonObject config = root != null && root.has("config") && root.get("config").isJsonObject()
+                ? root.getAsJsonObject("config") : new JsonObject();
+        String iiifBase = stringValue(config, "iiif_url");
+        if (iiifBase.isBlank()) {
+            iiifBase = "https://www.artic.edu/iiif/2";
+        }
+        List<OnlineWallpaper> results = new ArrayList<>();
+        for (JsonElement element : items) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            if (!booleanValue(item, "is_public_domain")) {
+                continue;
+            }
+            String id = stringValue(item, "id");
+            String imageId = stringValue(item, "image_id");
+            if (id.isBlank() || imageId.isBlank()) {
+                continue;
+            }
+            String imageBase = iiifBase + "/" + encodePathSegment(imageId) + "/full/";
+            results.add(new OnlineWallpaper(
+                    firstNonBlank(stringValue(item, "title"), "Art Institute artwork " + id),
+                    URI.create(imageBase + "400,/0/default.jpg"),
+                    URI.create(imageBase + "843,/0/default.jpg"),
+                    URI.create(ART_INSTITUTE_ARTWORK_URL + encodePathSegment(id)),
+                    stringValue(item, "artist_title"),
+                    "Public domain",
+                    "image/jpeg",
+                    0,
+                    0,
+                    "Art Institute of Chicago"));
+        }
+        return List.copyOf(results);
+    }
+
     private JsonObject getJson(URI uri, String source) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(25))
@@ -362,11 +474,29 @@ public final class WallpaperSearchService {
                 .strip();
     }
 
-    private String firstNonBlank(String first, String second) {
+    private static String firstNonBlank(String first, String second) {
         return first.isBlank() ? second : first;
     }
 
-    private String stringValue(JsonObject object, String key) {
+    private static String nasaThumbnail(JsonObject item) {
+        JsonArray links = item.has("links") && item.get("links").isJsonArray()
+                ? item.getAsJsonArray("links") : new JsonArray();
+        for (JsonElement element : links) {
+            if (element.isJsonObject()) {
+                String href = stringValue(element.getAsJsonObject(), "href");
+                if (href.startsWith("https://")) {
+                    return href;
+                }
+            }
+        }
+        return "";
+    }
+
+    private static String encodePathSegment(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    private static String stringValue(JsonObject object, String key) {
         if (object == null || !object.has(key) || object.get(key).isJsonNull()) {
             return "";
         }
@@ -378,6 +508,14 @@ public final class WallpaperSearchService {
             return object.has(key) ? object.get(key).getAsInt() : 0;
         } catch (RuntimeException ignored) {
             return 0;
+        }
+    }
+
+    private static boolean booleanValue(JsonObject object, String key) {
+        try {
+            return object != null && object.has(key) && object.get(key).getAsBoolean();
+        } catch (RuntimeException ignored) {
+            return false;
         }
     }
 }

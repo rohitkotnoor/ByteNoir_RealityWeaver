@@ -51,12 +51,20 @@
                 <version>0.0.8</version>
                 <configuration>
                     <mainClass>com.realityweaver/com.realityweaver.RealityWeaverApplication</mainClass>
+                    <options>
+                        <option>-Djava.util.prefs.PreferencesFactory=com.realityweaver.util.FilePreferencesFactory</option>
+                    </options>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.4</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.prefs.PreferencesFactory>com.realityweaver.util.FilePreferencesFactory</java.util.prefs.PreferencesFactory>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

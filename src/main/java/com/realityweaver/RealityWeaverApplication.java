@@ -41,14 +41,22 @@ public final class RealityWeaverApplication extends Application {
         scene.getStylesheets().add(
                 RealityWeaverApplication.class.getResource("/styles/app.css").toExternalForm());
 
-        stage.setTitle("RealityWeaver — World-building studio");
+        stage.setTitle("RealityWeaver — Smart Desktop Wallpaper Studio");
         stage.setMinWidth(900);
         stage.setMinHeight(660);
         stage.setScene(scene);
         installSystemTray(stage);
         stage.setOnCloseRequest(event -> {
-            event.consume();
-            Platform.exit();
+            if (trayIcon != null && SystemTray.isSupported()) {
+                event.consume();
+                stage.hide();
+                try {
+                    trayIcon.displayMessage("RealityWeaver", "RealityWeaver continues running in the system tray. Click to open.",
+                            TrayIcon.MessageType.INFO);
+                } catch (Exception ignored) { }
+            } else {
+                Platform.exit();
+            }
         });
         stage.show();
     }
@@ -60,18 +68,30 @@ public final class RealityWeaverApplication extends Application {
         PopupMenu menu = new PopupMenu();
         java.awt.MenuItem open = new java.awt.MenuItem("Open RealityWeaver");
         open.addActionListener(event -> Platform.runLater(this::showWindow));
+
+        java.awt.MenuItem checkNow = new java.awt.MenuItem("Trigger Next / Check Rules Now");
+        checkNow.addActionListener(event -> wallpaperAutomationService.checkNow());
+
+        java.awt.MenuItem resume = new java.awt.MenuItem("Resume Automation");
+        resume.addActionListener(event -> wallpaperAutomationService.resumeAutomation());
+
         java.awt.MenuItem toggleAutomation = new java.awt.MenuItem("Toggle wallpaper automation");
         toggleAutomation.addActionListener(event -> {
             boolean enable = !wallpaperAutomationService.isEnabled();
             wallpaperAutomationService.setEnabled(enable, ignored -> { });
         });
-        java.awt.MenuItem exit = new java.awt.MenuItem("Exit");
+
+        java.awt.MenuItem exit = new java.awt.MenuItem("Exit RealityWeaver");
         exit.addActionListener(event -> Platform.runLater(Platform::exit));
+
         menu.add(open);
         menu.addSeparator();
+        menu.add(checkNow);
+        menu.add(resume);
         menu.add(toggleAutomation);
         menu.addSeparator();
         menu.add(exit);
+
         trayIcon = new TrayIcon(createTrayImage(), "RealityWeaver", menu);
         trayIcon.setImageAutoSize(true);
         trayIcon.addActionListener(event -> Platform.runLater(this::showWindow));
@@ -80,7 +100,7 @@ public final class RealityWeaverApplication extends Application {
             Platform.setImplicitExit(false);
             stage.iconifiedProperty().addListener((observable, wasIconified, isIconified) -> {
                 if (isIconified && trayIcon != null) {
-                    trayIcon.displayMessage("RealityWeaver", "RealityWeaver is still available from the taskbar or tray.",
+                    trayIcon.displayMessage("RealityWeaver", "RealityWeaver is running in the background. Double-click the tray icon to restore.",
                             TrayIcon.MessageType.INFO);
                 }
             });

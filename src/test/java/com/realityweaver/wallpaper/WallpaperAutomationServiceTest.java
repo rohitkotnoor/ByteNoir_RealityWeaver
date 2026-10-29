@@ -64,6 +64,46 @@ final class WallpaperAutomationServiceTest {
     }
 
     @Test
+    void ruleEnabledTogglesPersistCorrectly() {
+        Path image = temporaryDirectory.resolve("wallpaper.png");
+        service.addTimeRule("09:00", image);
+        String timeId = service.timeRules().getFirst().id();
+        assertTrue(service.timeRules().getFirst().enabled());
+
+        service.setTimeRuleEnabled(timeId, false);
+        assertFalse(service.timeRules().getFirst().enabled());
+
+        service.addWeatherRule("Paris", WallpaperAutomationService.WeatherCondition.RAIN, image, false);
+        String weatherId = service.weatherRules().getFirst().id();
+        service.setWeatherRuleEnabled(weatherId, false);
+        assertFalse(service.weatherRules().getFirst().enabled());
+
+        service.addCalendarRule("presentation", image);
+        String calId = service.calendarRules().getFirst().id();
+        service.setCalendarRuleEnabled(calId, false);
+        assertFalse(service.calendarRules().getFirst().enabled());
+    }
+
+    @Test
+    void remoteCalendarUrlSettingAndClearing() {
+        assertEquals("", service.calendarUrl());
+        service.setCalendarUrl("https://calendar.google.com/calendar/ical/example/basic.ics");
+        assertEquals("https://calendar.google.com/calendar/ical/example/basic.ics", service.calendarUrl());
+
+        service.setCalendarUrl("");
+        assertEquals("", service.calendarUrl());
+    }
+
+    @Test
+    void resumeAutomationClearsManualOverride() {
+        service.recordManualOverride();
+        assertTrue(service.isManualOverrideActive());
+
+        service.resumeAutomation();
+        assertFalse(service.isManualOverrideActive());
+    }
+
+    @Test
     void currentLocalTimeSelectsLatestRuleAndWrapsToPriorDay() {
         List<WallpaperAutomationService.TimeRule> rules = List.of(
                 new WallpaperAutomationService.TimeRule("morning", "06:00", Path.of("morning.png")),
@@ -103,5 +143,25 @@ final class WallpaperAutomationServiceTest {
     void anAlreadyAppliedCalendarEventIsNotAppliedAgain() {
         assertTrue(WallpaperAutomationService.isNewCalendarEvent("event-42", "event-41"));
         assertFalse(WallpaperAutomationService.isNewCalendarEvent("event-42", "event-42"));
+    }
+
+    @Test
+    void parseTimeFlexiblyHandlesVariousFormats() {
+        assertEquals(LocalTime.of(6, 0), WallpaperAutomationService.parseTimeFlexibly("06:00"));
+        assertEquals(LocalTime.of(6, 0), WallpaperAutomationService.parseTimeFlexibly("6:00"));
+        assertEquals(LocalTime.of(9, 0), WallpaperAutomationService.parseTimeFlexibly("9"));
+        assertEquals(LocalTime.of(14, 30), WallpaperAutomationService.parseTimeFlexibly("14:30"));
+        assertEquals(LocalTime.of(14, 30), WallpaperAutomationService.parseTimeFlexibly("2:30 PM"));
+    }
+
+    @Test
+    void intervalCyclePreferencesPersist() {
+        assertFalse(service.isIntervalCycleEnabled());
+        service.setIntervalCycle(true, 5, "vault-1");
+        assertTrue(service.isIntervalCycleEnabled());
+        assertEquals(5, service.intervalCycleMinutes());
+        assertEquals("vault-1", service.intervalCycleCollectionId());
+        service.setIntervalCycle(false, 5, "vault-1");
+        assertFalse(service.isIntervalCycleEnabled());
     }
 }

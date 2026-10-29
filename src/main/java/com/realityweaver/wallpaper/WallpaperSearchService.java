@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.realityweaver.util.AppPreferences;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -15,8 +16,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 
 /** Searches image catalogs and downloads selected images for the local wallpaper library. */
@@ -29,13 +33,127 @@ public final class WallpaperSearchService {
     private static final String NASA_ASSETS_URL = "https://images-assets.nasa.gov/image/";
     private static final String ART_INSTITUTE_API = "https://api.artic.edu/api/v1/artworks/search";
     private static final String ART_INSTITUTE_ARTWORK_URL = "https://www.artic.edu/artworks/";
-    private static final String USER_AGENT = "RealityWeaver/1.0 (JavaFX wallpaper discovery)";
+    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 RealityWeaver/1.0";
     private static final long MAX_IMAGE_BYTES = 100L * 1024 * 1024;
+    private static final Path THUMBNAIL_CACHE_DIR = Path.of(
+            System.getProperty("user.home"), ".realityweaver", "thumbnail-cache");
 
-    private final HttpClient client = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(12))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    private volatile HttpClient client;
+
+    private HttpClient getClient() {
+        HttpClient c = client;
+        if (c == null) {
+            synchronized (this) {
+                c = client;
+                if (c == null) {
+                    c = HttpClient.newBuilder()
+                            .connectTimeout(Duration.ofSeconds(15))
+                            .followRedirects(HttpClient.Redirect.ALWAYS)
+                            .build();
+                    client = c;
+                }
+            }
+        }
+        return c;
+    }
+
+    public static String getWallhavenApiKey() {
+        String key = System.getenv("WALLHAVEN_API_KEY");
+        if (key != null && !key.isBlank()) {
+            return key.strip();
+        }
+        return AppPreferences.forPackage(WallpaperSearchService.class).get("wallhaven.apiKey", "");
+    }
+
+    public static void setWallhavenApiKey(String key) {
+        if (key == null || key.isBlank()) {
+            AppPreferences.forPackage(WallpaperSearchService.class).remove("wallhaven.apiKey");
+        } else {
+            AppPreferences.forPackage(WallpaperSearchService.class).put("wallhaven.apiKey", key.strip());
+        }
+    }
+
+    public static String getPexelsApiKey() {
+        String key = System.getenv("PEXELS_API_KEY");
+        if (key != null && !key.isBlank()) {
+            return key.strip();
+        }
+        return AppPreferences.forPackage(WallpaperSearchService.class).get("pexels.apiKey", "");
+    }
+
+    public static void setPexelsApiKey(String key) {
+        if (key == null || key.isBlank()) {
+            AppPreferences.forPackage(WallpaperSearchService.class).remove("pexels.apiKey");
+        } else {
+            AppPreferences.forPackage(WallpaperSearchService.class).put("pexels.apiKey", key.strip());
+        }
+    }
+
+    public static String getPixabayApiKey() {
+        String key = System.getenv("PIXABAY_API_KEY");
+        if (key != null && !key.isBlank()) {
+            return key.strip();
+        }
+        return AppPreferences.forPackage(WallpaperSearchService.class).get("pixabay.apiKey", "");
+    }
+
+    public static void setPixabayApiKey(String key) {
+        if (key == null || key.isBlank()) {
+            AppPreferences.forPackage(WallpaperSearchService.class).remove("pixabay.apiKey");
+        } else {
+            AppPreferences.forPackage(WallpaperSearchService.class).put("pixabay.apiKey", key.strip());
+        }
+    }
+
+    public static long getThumbnailCacheSizeBytes() {
+        try {
+            if (Files.exists(THUMBNAIL_CACHE_DIR)) {
+                try (var stream = Files.list(THUMBNAIL_CACHE_DIR)) {
+                    return stream.mapToLong(p -> {
+                        try {
+                            return Files.size(p);
+                        } catch (Exception e) {
+                            return 0L;
+                        }
+                    }).sum();
+                }
+            }
+        } catch (Exception ignored) { }
+        return 0L;
+    }
+
+    public static int getThumbnailCacheFileCount() {
+        try {
+            if (Files.exists(THUMBNAIL_CACHE_DIR)) {
+                try (var stream = Files.list(THUMBNAIL_CACHE_DIR)) {
+                    return (int) stream.count();
+                }
+            }
+        } catch (Exception ignored) { }
+        return 0;
+    }
+
+    public static int clearThumbnailCache() {
+        int cleared = 0;
+        try {
+            if (Files.exists(THUMBNAIL_CACHE_DIR)) {
+                try (var stream = Files.list(THUMBNAIL_CACHE_DIR)) {
+                    for (Path p : stream.toList()) {
+                        try {
+                            if (Files.deleteIfExists(p)) {
+                                cleared++;
+                            }
+                        } catch (Exception ignored) { }
+                    }
+                }
+            }
+        } catch (Exception ignored) { }
+        return cleared;
+    }
+
+    public Path getCachedThumbnailPath(URI uri) {
+        return cachePath(uri);
+    }
 
     public List<OnlineWallpaper> search(String query, WallpaperSource source)
             throws IOException, InterruptedException {
@@ -48,9 +166,13 @@ public final class WallpaperSearchService {
             throw new IllegalArgumentException("Search page is outside the supported range.");
         }
         return switch (source) {
+            case WALLHAVEN -> searchWallhaven(query, false, page);
+            case BING_UHD -> searchBing(query, page);
+            case PICSUM -> searchPicsum(query, page);
+            case PEXELS -> searchPexels(query, page);
+            case PIXABAY -> searchPixabay(query, page);
             case OPENVERSE -> searchOpenverse(query, page);
             case WIKIMEDIA_COMMONS -> searchCommons(query, page);
-            case WALLHAVEN -> searchWallhaven(query, false, page);
             case NASA_IMAGES -> searchNasa(query, page);
             case ART_INSTITUTE -> searchArtInstitute(query, page);
         };
@@ -65,6 +187,189 @@ public final class WallpaperSearchService {
             throw new IllegalArgumentException("Search page is outside the supported range.");
         }
         return searchWallhaven("", true, page);
+    }
+
+    private List<OnlineWallpaper> searchBing(String query, int page) throws IOException, InterruptedException {
+        int idx = (page - 1) * 8;
+        URI requestUri = URI.create("https://www.bing.com/HPImageArchive.aspx?format=js&idx=" + idx + "&n=8&mkt=en-US");
+        JsonObject root = getJson(requestUri, "Bing 4K UHD");
+        JsonArray items = root.has("images") && root.get("images").isJsonArray()
+                ? root.getAsJsonArray("images") : new JsonArray();
+
+        List<OnlineWallpaper> results = new ArrayList<>();
+        for (JsonElement element : items) {
+            JsonObject item = element.getAsJsonObject();
+            String urlbase = stringValue(item, "urlbase");
+            String relUrl = stringValue(item, "url");
+            String fullUrl = !urlbase.isBlank() ? "https://www.bing.com" + urlbase + "_UHD.jpg"
+                    : "https://www.bing.com" + relUrl;
+            String thumbUrl = "https://www.bing.com" + relUrl;
+            String title = stringValue(item, "title");
+            if (title.isBlank()) {
+                title = stringValue(item, "copyright");
+            }
+            String copyright = stringValue(item, "copyright");
+            String sourceUrl = stringValue(item, "copyrightlink");
+            if (sourceUrl.isBlank()) {
+                sourceUrl = "https://www.bing.com";
+            }
+            results.add(new OnlineWallpaper(
+                    title.isBlank() ? "Bing Daily 4K Wallpaper" : title,
+                    URI.create(thumbUrl),
+                    URI.create(fullUrl),
+                    URI.create(sourceUrl),
+                    copyright,
+                    "Bing Daily UHD (Desktop background)",
+                    "image/jpeg",
+                    3840,
+                    2160,
+                    "Bing 4K UHD"));
+        }
+        return List.copyOf(results);
+    }
+
+    private List<OnlineWallpaper> searchPicsum(String query, int page) throws IOException, InterruptedException {
+        URI uri = URI.create("https://picsum.photos/v2/list?page=" + page + "&limit=24");
+        HttpRequest request = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(20))
+                .header("User-Agent", USER_AGENT)
+                .GET()
+                .build();
+        HttpResponse<String> response = getClient().send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException("Picsum returned HTTP " + response.statusCode() + ".");
+        }
+
+        try {
+            JsonArray array = JsonParser.parseString(response.body()).getAsJsonArray();
+            List<OnlineWallpaper> results = new ArrayList<>();
+            for (JsonElement element : array) {
+                JsonObject item = element.getAsJsonObject();
+                String id = stringValue(item, "id");
+                String author = stringValue(item, "author");
+                int width = integerValue(item, "width");
+                int height = integerValue(item, "height");
+                String sourceUrl = stringValue(item, "url");
+                String fullUrl = "https://picsum.photos/id/" + id + "/" + (width > 0 ? Math.min(width, 3840) : 1920)
+                        + "/" + (height > 0 ? Math.min(height, 2160) : 1080);
+                String thumbUrl = "https://picsum.photos/id/" + id + "/400/240";
+                results.add(new OnlineWallpaper(
+                        author + " · Photo #" + id,
+                        URI.create(thumbUrl),
+                        URI.create(fullUrl),
+                        URI.create(sourceUrl.isBlank() ? "https://picsum.photos" : sourceUrl),
+                        author,
+                        "Free to use (Unsplash / Picsum)",
+                        "image/jpeg",
+                        width,
+                        height,
+                        "Picsum Curated"));
+            }
+            return List.copyOf(results);
+        } catch (RuntimeException failure) {
+            throw new IOException("Could not parse Picsum photos response.", failure);
+        }
+    }
+
+    private List<OnlineWallpaper> searchPexels(String query, int page) throws IOException, InterruptedException {
+        String key = getPexelsApiKey();
+        if (key.isBlank()) {
+            throw new IOException("Pexels requires an API key. Please configure your free Pexels API key in Settings (or select Bing 4K UHD, Picsum, or Wallhaven).");
+        }
+        String url = query.isBlank()
+                ? "https://api.pexels.com/v1/curated?per_page=24&page=" + page
+                : "https://api.pexels.com/v1/search?query=" + URLEncoder.encode(query, StandardCharsets.UTF_8)
+                        + "&per_page=24&page=" + page;
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(20))
+                .header("User-Agent", USER_AGENT)
+                .header("Authorization", key)
+                .GET()
+                .build();
+        HttpResponse<String> response = getClient().send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException("Pexels returned HTTP " + response.statusCode() + " (Check your API key).");
+        }
+        try {
+            JsonObject root = JsonParser.parseString(response.body()).getAsJsonObject();
+            JsonArray photos = root.has("photos") ? root.getAsJsonArray("photos") : new JsonArray();
+            List<OnlineWallpaper> results = new ArrayList<>();
+            for (JsonElement el : photos) {
+                JsonObject p = el.getAsJsonObject();
+                String id = stringValue(p, "id");
+                String photographer = stringValue(p, "photographer");
+                String sourceUrl = stringValue(p, "url");
+                String alt = stringValue(p, "alt");
+                if (alt.isBlank()) alt = "Pexels photo " + id;
+                int width = integerValue(p, "width");
+                int height = integerValue(p, "height");
+                JsonObject src = p.has("src") ? p.getAsJsonObject("src") : new JsonObject();
+                String fullUrl = firstNonBlank(stringValue(src, "original"), stringValue(src, "large2x"));
+                String thumbUrl = firstNonBlank(stringValue(src, "medium"), stringValue(src, "small"));
+                results.add(new OnlineWallpaper(
+                        alt,
+                        URI.create(thumbUrl),
+                        URI.create(fullUrl),
+                        URI.create(sourceUrl),
+                        photographer,
+                        "Pexels license (free to use)",
+                        "image/jpeg",
+                        width,
+                        height,
+                        "Pexels"));
+            }
+            return List.copyOf(results);
+        } catch (RuntimeException failure) {
+            throw new IOException("Could not parse Pexels response.", failure);
+        }
+    }
+
+    private List<OnlineWallpaper> searchPixabay(String query, int page) throws IOException, InterruptedException {
+        String key = getPixabayApiKey();
+        if (key.isBlank()) {
+            throw new IOException("Pixabay requires an API key. Please configure your free Pixabay API key in Settings (or select Bing 4K UHD, Picsum, or Wallhaven).");
+        }
+        String q = URLEncoder.encode(query.isBlank() ? "wallpaper" : query, StandardCharsets.UTF_8);
+        String url = "https://pixabay.com/api/?key=" + URLEncoder.encode(key, StandardCharsets.UTF_8)
+                + "&q=" + q + "&image_type=photo&per_page=24&page=" + page;
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(20))
+                .header("User-Agent", USER_AGENT)
+                .GET()
+                .build();
+        HttpResponse<String> response = getClient().send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException("Pixabay returned HTTP " + response.statusCode() + " (Check your API key).");
+        }
+        try {
+            JsonObject root = JsonParser.parseString(response.body()).getAsJsonObject();
+            JsonArray hits = root.has("hits") ? root.getAsJsonArray("hits") : new JsonArray();
+            List<OnlineWallpaper> results = new ArrayList<>();
+            for (JsonElement el : hits) {
+                JsonObject item = el.getAsJsonObject();
+                String fullUrl = firstNonBlank(stringValue(item, "largeImageURL"), stringValue(item, "webformatURL"));
+                String thumbUrl = firstNonBlank(stringValue(item, "webformatURL"), stringValue(item, "previewURL"));
+                String sourceUrl = stringValue(item, "pageURL");
+                String user = stringValue(item, "user");
+                String tags = stringValue(item, "tags");
+                int width = integerValue(item, "imageWidth");
+                int height = integerValue(item, "imageHeight");
+                results.add(new OnlineWallpaper(
+                        tags.isBlank() ? "Pixabay wallpaper" : tags,
+                        URI.create(thumbUrl),
+                        URI.create(fullUrl),
+                        URI.create(sourceUrl),
+                        user,
+                        "Pixabay license (free to use)",
+                        "image/jpeg",
+                        width,
+                        height,
+                        "Pixabay"));
+            }
+            return List.copyOf(results);
+        } catch (RuntimeException failure) {
+            throw new IOException("Could not parse Pixabay response.", failure);
+        }
     }
 
     private List<OnlineWallpaper> searchCommons(String query, int page) throws IOException, InterruptedException {
@@ -82,7 +387,7 @@ public final class WallpaperSearchService {
                 .header("User-Agent", USER_AGENT)
                 .GET()
                 .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = getClient().send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Wikimedia Commons returned HTTP " + response.statusCode() + ".");
         }
@@ -199,6 +504,10 @@ public final class WallpaperSearchService {
         if (!query.isBlank()) {
             requestUrl.append("&q=").append(URLEncoder.encode(query.strip(), StandardCharsets.UTF_8));
         }
+        String apiKey = getWallhavenApiKey();
+        if (!apiKey.isBlank()) {
+            requestUrl.append("&apikey=").append(URLEncoder.encode(apiKey, StandardCharsets.UTF_8));
+        }
 
         JsonObject root = getJson(URI.create(requestUrl.toString()), "Wallhaven");
         JsonArray items = root.has("data") && root.get("data").isJsonArray()
@@ -251,7 +560,6 @@ public final class WallpaperSearchService {
         return List.copyOf(results);
     }
 
-    /** Wallhaven uses a separate safe category for anime; all other searches use its general catalog. */
     static String wallhavenCategoriesFor(String query) {
         String normalized = query == null ? "" : query.toLowerCase(java.util.Locale.ROOT);
         return normalized.contains("anime") || normalized.contains("manga") || normalized.contains("japanese animation")
@@ -265,7 +573,6 @@ public final class WallpaperSearchService {
         return parseNasaResponse(root);
     }
 
-    /** Converts NASA's public image-library search response into downloadable image records. */
     static List<OnlineWallpaper> parseNasaResponse(JsonObject root) {
         JsonObject collection = root != null && root.has("collection") && root.get("collection").isJsonObject()
                 ? root.getAsJsonObject("collection") : null;
@@ -323,7 +630,6 @@ public final class WallpaperSearchService {
         return parseArtInstituteResponse(root);
     }
 
-    /** Keeps only public-domain Art Institute results that expose an IIIF image identifier. */
     static List<OnlineWallpaper> parseArtInstituteResponse(JsonObject root) {
         JsonArray items = root != null && root.has("data") && root.get("data").isJsonArray()
                 ? root.getAsJsonArray("data") : new JsonArray();
@@ -367,9 +673,10 @@ public final class WallpaperSearchService {
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(25))
                 .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json, text/plain, */*")
                 .GET()
                 .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = getClient().send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return parseJsonResponse(response.statusCode(), response.body(), source);
     }
 
@@ -396,19 +703,58 @@ public final class WallpaperSearchService {
     }
 
     public byte[] fetchThumbnail(OnlineWallpaper wallpaper) throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder(requireHttpsUri(wallpaper.thumbnailUri()))
+        Path cached = cachePath(wallpaper.thumbnailUri());
+        if (cached != null && Files.isRegularFile(cached)) {
+            try {
+                if (Files.size(cached) > 0) {
+                    return Files.readAllBytes(cached);
+                }
+            } catch (IOException ignored) { }
+        }
+
+        URI thumbUri = requireHttpsUri(wallpaper.thumbnailUri());
+        String host = thumbUri.getHost();
+        String referer = (host != null && !host.isBlank())
+                ? thumbUri.getScheme() + "://" + host + "/"
+                : "https://wallhaven.cc/";
+
+        HttpRequest request = HttpRequest.newBuilder(thumbUri)
                 .timeout(Duration.ofSeconds(25))
                 .header("User-Agent", USER_AGENT)
+                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                .header("Referer", referer)
                 .GET()
                 .build();
-        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> response = getClient().send(request, HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("The preview image could not be downloaded (HTTP " + response.statusCode() + ").");
         }
         if (response.body().length > 8 * 1024 * 1024) {
             throw new IOException("The preview image is larger than expected.");
         }
-        return response.body();
+
+        byte[] data = response.body();
+        if (cached != null && data.length > 0) {
+            try {
+                Files.createDirectories(THUMBNAIL_CACHE_DIR);
+                Files.write(cached, data);
+            } catch (Exception ignored) { }
+        }
+        return data;
+    }
+
+    private Path cachePath(URI uri) {
+        if (uri == null) {
+            return null;
+        }
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(uri.toString().getBytes(StandardCharsets.UTF_8));
+            String hex = HexFormat.of().formatHex(hash);
+            return THUMBNAIL_CACHE_DIR.resolve(hex + ".thumb");
+        } catch (NoSuchAlgorithmException e) {
+            return null;
+        }
     }
 
     public void download(OnlineWallpaper wallpaper, Path destination) throws IOException, InterruptedException {
@@ -421,12 +767,19 @@ public final class WallpaperSearchService {
         Path temporary = Files.createTempFile(parent, ".realityweaver-wallpaper-", ".part");
 
         try {
-            HttpRequest request = HttpRequest.newBuilder(requireHttpsUri(wallpaper.fileUri()))
-                    .timeout(Duration.ofSeconds(60))
-                    .header("User-Agent", USER_AGENT)
-                    .GET()
-                    .build();
-            HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            URI fileUri = requireHttpsUri(wallpaper.fileUri());
+            String host = fileUri.getHost();
+            String referer = (host != null && !host.isBlank())
+                    ? fileUri.getScheme() + "://" + host + "/"
+                    : "https://wallhaven.cc/";
+
+            HttpRequest request = HttpRequest.newBuilder(fileUri)
+                .timeout(Duration.ofSeconds(60))
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", referer)
+                .GET()
+                .build();
+            HttpResponse<InputStream> response = getClient().send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 response.body().close();
                 throw new IOException("The image download failed (HTTP " + response.statusCode() + ").");

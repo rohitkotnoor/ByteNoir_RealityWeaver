@@ -3,6 +3,7 @@ package com.realityweaver.ui;
 import com.realityweaver.StartupService;
 import com.realityweaver.wallpaper.WallpaperLibrary;
 import com.realityweaver.wallpaper.WallpaperAutomationService;
+import com.realityweaver.wallpaper.WallpaperSearchService;
 import com.realityweaver.wallpaper.WallpaperService;
 import java.io.File;
 import java.awt.Desktop;
@@ -64,6 +65,7 @@ public final class WallpaperStudioView extends BorderPane {
     private final Label applyStatus = new Label();
     private final CheckBox automationEnabled = new CheckBox("Enable automatic wallpaper changes");
     private final Label automationStatus = new Label("Automation is off.");
+    private final Button resumeAutomationButton = new Button("Resume Automation");
     private final VBox timeRulesList = new VBox(7);
     private final VBox weatherRulesList = new VBox(7);
     private final VBox calendarRulesList = new VBox(7);
@@ -158,21 +160,97 @@ public final class WallpaperStudioView extends BorderPane {
     }
 
     private ScrollPane createSettingsPanel() {
-        Label title = new Label("Wallpaper settings");
+        Label currentTitle = new Label("Current desktop wallpaper");
+        currentTitle.getStyleClass().add("section-title");
+        Path currentWall = wallpaperService.getCurrentWallpaper().orElse(null);
+        Label currentWallStatus = new Label(currentWall != null
+                ? "Active on desktop: " + currentWall.getFileName() + " (" + currentWall + ")"
+                : "Active on desktop: Default or managed externally.");
+        currentWallStatus.setWrapText(true);
+        currentWallStatus.getStyleClass().add("memory-export-hint");
+        VBox desktopCard = new VBox(10, currentTitle, currentWallStatus);
+        desktopCard.getStyleClass().add("automation-section-card");
+
+        Label title = new Label("Wallpaper scaling & fit");
         title.getStyleClass().add("section-title");
-        Label detail = new Label("Choose how images fit your desktop. Windows and GNOME apply all four modes; macOS uses its current desktop scaling setting.");
+        Label detail = new Label("Choose how images fit your desktop screen. Windows and GNOME apply all four modes (Fill, Fit, Stretch, Center); macOS uses desktop preferences.");
         detail.getStyleClass().add("page-subtitle");
         detail.setWrapText(true);
         wallpaperFitChoice.getItems().setAll(WallpaperService.WallpaperFit.values());
         wallpaperFitChoice.setValue(wallpaperService.preferredFit());
         wallpaperFitChoice.getStyleClass().add("automation-wallpaper-choice");
         wallpaperFitChoice.setOnAction(event -> wallpaperService.setPreferredFit(wallpaperFitChoice.getValue()));
-        Label fitLabel = new Label("Desktop image fit");
+        Label fitLabel = new Label("Desktop image fit mode");
         fitLabel.getStyleClass().add("memory-field-label");
         HBox fitRow = new HBox(12, fitLabel, wallpaperFitChoice);
         fitRow.setAlignment(Pos.CENTER_LEFT);
         VBox appearanceCard = new VBox(12, title, detail, fitRow);
         appearanceCard.getStyleClass().add("automation-section-card");
+
+        Label apiTitle = new Label("Provider API keys (optional)");
+        apiTitle.getStyleClass().add("section-title");
+        Label apiDetail = new Label("Bing 4K UHD, Picsum, and Wallhaven work out-of-the-box without keys. To connect Pexels, Pixabay, or Wallhaven personal accounts, paste your keys below.");
+        apiDetail.setWrapText(true);
+        apiDetail.getStyleClass().add("page-subtitle");
+
+        TextField wallhavenInput = new TextField(WallpaperSearchService.getWallhavenApiKey());
+        wallhavenInput.setPromptText("Wallhaven API key (optional)");
+        Button saveWallhaven = new Button("Save Wallhaven");
+        saveWallhaven.getStyleClass().add("quiet-button");
+        saveWallhaven.setOnAction(e -> {
+            WallpaperSearchService.setWallhavenApiKey(wallhavenInput.getText());
+            showAlert(Alert.AlertType.INFORMATION, "Wallhaven API Key", wallhavenInput.getText().isBlank() ? "Key cleared" : "Wallhaven API key saved successfully!");
+        });
+        HBox wallhavenRow = new HBox(8, wallhavenInput, saveWallhaven);
+        wallhavenRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(wallhavenInput, Priority.ALWAYS);
+
+        TextField pexelsInput = new TextField(WallpaperSearchService.getPexelsApiKey());
+        pexelsInput.setPromptText("Pexels API key (optional — unlocks Pexels photography)");
+        Button savePexels = new Button("Save Pexels");
+        savePexels.getStyleClass().add("quiet-button");
+        savePexels.setOnAction(e -> {
+            WallpaperSearchService.setPexelsApiKey(pexelsInput.getText());
+            showAlert(Alert.AlertType.INFORMATION, "Pexels API Key", pexelsInput.getText().isBlank() ? "Key cleared" : "Pexels API key saved successfully!");
+        });
+        HBox pexelsRow = new HBox(8, pexelsInput, savePexels);
+        pexelsRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(pexelsInput, Priority.ALWAYS);
+
+        TextField pixabayInput = new TextField(WallpaperSearchService.getPixabayApiKey());
+        pixabayInput.setPromptText("Pixabay API key (optional — unlocks Pixabay wallpapers)");
+        Button savePixabay = new Button("Save Pixabay");
+        savePixabay.getStyleClass().add("quiet-button");
+        savePixabay.setOnAction(e -> {
+            WallpaperSearchService.setPixabayApiKey(pixabayInput.getText());
+            showAlert(Alert.AlertType.INFORMATION, "Pixabay API Key", pixabayInput.getText().isBlank() ? "Key cleared" : "Pixabay API key saved successfully!");
+        });
+        HBox pixabayRow = new HBox(8, pixabayInput, savePixabay);
+        pixabayRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(pixabayInput, Priority.ALWAYS);
+
+        VBox apiCard = new VBox(10, apiTitle, apiDetail,
+                new Label("Wallhaven API Key:"), wallhavenRow,
+                new Label("Pexels API Key:"), pexelsRow,
+                new Label("Pixabay API Key:"), pixabayRow);
+        apiCard.getStyleClass().add("automation-section-card");
+
+        Label cacheTitle = new Label("Thumbnail cache storage");
+        cacheTitle.getStyleClass().add("section-title");
+        long cacheBytes = WallpaperSearchService.getThumbnailCacheSizeBytes();
+        int cacheCount = WallpaperSearchService.getThumbnailCacheFileCount();
+        Label cacheInfo = new Label("Cached thumbnails: " + cacheCount + " files (" + (cacheBytes / 1024) + " KB)");
+        cacheInfo.getStyleClass().add("memory-export-hint");
+        Button clearCache = new Button("Clear Thumbnail Cache");
+        clearCache.getStyleClass().add("quiet-button");
+        clearCache.setOnAction(event -> {
+            int cleared = WallpaperSearchService.clearThumbnailCache();
+            cacheInfo.setText("Cleared " + cleared + " cached thumbnail files (0 KB).");
+        });
+        VBox cacheCard = new VBox(10, cacheTitle,
+                new Label("Online discovery thumbnails are safely cached on disk to speed up subsequent queries and avoid re-downloading."),
+                cacheInfo, clearCache);
+        cacheCard.getStyleClass().add("automation-section-card");
 
         Label storageTitle = new Label("Your saved data");
         storageTitle.getStyleClass().add("section-title");
@@ -183,7 +261,7 @@ public final class WallpaperStudioView extends BorderPane {
         openStorage.getStyleClass().add("quiet-button");
         openStorage.setOnAction(event -> openStorageFolder());
         VBox storageCard = new VBox(10, storageTitle,
-                new Label("Collections, worlds, downloaded images, and local account data are kept here."),
+                new Label("Collections, worlds, downloaded images, and local preferences are stored here."),
                 storagePath, openStorage);
         storageCard.getStyleClass().add("automation-section-card");
 
@@ -202,16 +280,16 @@ public final class WallpaperStudioView extends BorderPane {
         VBox startupCard = new VBox(10, startupTitle, launchOnSignIn, startupStatus);
         startupCard.getStyleClass().add("automation-section-card");
 
-        Label integrationsTitle = new Label("Optional connections");
+        Label integrationsTitle = new Label("Weather & calendar provider notes");
         integrationsTitle.getStyleClass().add("section-title");
-        Label integrations = new Label("Weather uses Open-Meteo and can use a city or your approximate internet location. "
-                + "Calendar rules can read a local .ics file or this PC’s Classic Outlook calendar. Configure them in Automation.");
+        Label integrations = new Label("Weather is provided by Open-Meteo with no API key required. "
+                + "Calendar rules support remote Google Calendar / iCal feeds, local .ics files, and Classic Outlook. Configure them under the Automation tab.");
         integrations.setWrapText(true);
         integrations.getStyleClass().add("page-subtitle");
         VBox integrationsCard = new VBox(10, integrationsTitle, integrations);
         integrationsCard.getStyleClass().add("automation-section-card");
 
-        VBox content = new VBox(16, appearanceCard, storageCard, startupCard, integrationsCard);
+        VBox content = new VBox(16, desktopCard, appearanceCard, apiCard, cacheCard, storageCard, startupCard, integrationsCard);
         content.setPadding(new Insets(20));
         ScrollPane scrollPane = new ScrollPane(content);
         scrollPane.setFitToWidth(true);
@@ -293,8 +371,8 @@ public final class WallpaperStudioView extends BorderPane {
     private ScrollPane createAutomationPanel() {
         Label title = new Label("Let your wallpaper follow your day");
         title.getStyleClass().add("section-title");
-        Label description = new Label("Create rules for a time of day, local weather, or a matching calendar event. "
-                + "Automation runs while RealityWeaver is open.");
+        Label description = new Label("Create dynamic rules for time of day, atmospheric weather, or calendar events. "
+                + "Automation runs continuously in the background or system tray.");
         description.getStyleClass().add("page-subtitle");
         description.setWrapText(true);
 
@@ -312,7 +390,18 @@ public final class WallpaperStudioView extends BorderPane {
             automationStatus.setText("Checking saved rules…");
             automationService.checkNow();
         });
-        HBox controls = new HBox(14, automationEnabled, checkNow);
+
+        resumeAutomationButton.getStyleClass().add("quiet-button");
+        resumeAutomationButton.setVisible(automationService.isManualOverrideActive());
+        resumeAutomationButton.setManaged(automationService.isManualOverrideActive());
+        resumeAutomationButton.setOnAction(event -> {
+            automationService.resumeAutomation();
+            resumeAutomationButton.setVisible(false);
+            resumeAutomationButton.setManaged(false);
+            updateAutomationStatus("Manual override cleared. Automation resumed.");
+        });
+
+        HBox controls = new HBox(14, automationEnabled, checkNow, resumeAutomationButton);
         controls.setAlignment(Pos.CENTER_LEFT);
 
         automationStatus.getStyleClass().add("automation-status");
@@ -367,6 +456,30 @@ public final class WallpaperStudioView extends BorderPane {
         HBox calendarFileRow = new HBox(10, chooseCalendar, calendarFileStatus);
         calendarFileRow.setAlignment(Pos.CENTER_LEFT);
         calendarFileStatus.getStyleClass().add("automation-status");
+
+        TextField calendarUrlInput = new TextField();
+        calendarUrlInput.setPromptText("Remote iCal / Google Calendar URL (https://... or webcal://...)");
+        calendarUrlInput.setText(automationService.calendarUrl());
+        Button saveUrl = new Button("Save Feed");
+        saveUrl.getStyleClass().add("quiet-button");
+        saveUrl.setOnAction(event -> {
+            automationService.setCalendarUrl(calendarUrlInput.getText());
+            automationStatus.setText(calendarUrlInput.getText().isBlank() ? "Remote calendar feed cleared." : "Remote calendar feed saved.");
+            if (automationEnabled.isSelected()) {
+                automationService.checkNow();
+            }
+        });
+        Button clearUrl = new Button("Clear Feed");
+        clearUrl.getStyleClass().add("quiet-button");
+        clearUrl.setOnAction(event -> {
+            calendarUrlInput.clear();
+            automationService.setCalendarUrl("");
+            automationStatus.setText("Remote calendar feed removed.");
+        });
+        HBox calendarUrlRow = new HBox(8, calendarUrlInput, saveUrl, clearUrl);
+        calendarUrlRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(calendarUrlInput, Priority.ALWAYS);
+
         calendarKeywordInput.setPromptText("Event title contains… e.g. meeting");
         Button addCalendar = new Button("＋ Add event rule");
         addCalendar.getStyleClass().add("quiet-button");
@@ -376,13 +489,82 @@ public final class WallpaperStudioView extends BorderPane {
         HBox.setHgrow(calendarKeywordInput, Priority.ALWAYS);
         HBox.setHgrow(calendarWallpaperChoice, Priority.ALWAYS);
 
+        CheckBox intervalToggle = new CheckBox("Rotate wallpaper automatically");
+        intervalToggle.getStyleClass().add("automation-toggle");
+        intervalToggle.setSelected(automationService.isIntervalCycleEnabled());
+
+        ComboBox<Integer> intervalMins = new ComboBox<>();
+        intervalMins.getItems().setAll(1, 2, 5, 10, 15, 30, 60, 120);
+        intervalMins.setValue(automationService.intervalCycleMinutes());
+        intervalMins.getStyleClass().add("automation-wallpaper-choice");
+        intervalMins.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(Integer mins) {
+                if (mins == null) return "";
+                if (mins < 60) return mins + " minute" + (mins == 1 ? "" : "s");
+                return (mins / 60) + " hour" + ((mins / 60) == 1 ? "" : "s");
+            }
+            @Override
+            public Integer fromString(String string) { return null; }
+        });
+
+        ComboBox<String> intervalSource = new ComboBox<>();
+        intervalSource.getItems().add("Entire Library (all wallpapers)");
+        try {
+            for (com.realityweaver.wallpaper.WallpaperCollection col : new com.realityweaver.wallpaper.WallpaperCollectionStore().list()) {
+                intervalSource.getItems().add("Vault: " + col.name());
+            }
+        } catch (Exception ignored) { }
+        intervalSource.setValue("Entire Library (all wallpapers)");
+        intervalSource.getStyleClass().add("automation-wallpaper-choice");
+
+        Button cycleNow = new Button("Cycle Next Now");
+        cycleNow.getStyleClass().add("quiet-button");
+        cycleNow.setOnAction(ev -> {
+            automationService.triggerIntervalCycleNow();
+            automationStatus.setText("Next wallpaper cycled.");
+        });
+
+        Runnable updateIntervalSettings = () -> {
+            boolean active = intervalToggle.isSelected();
+            int mins = intervalMins.getValue() != null ? intervalMins.getValue() : 5;
+            String srcVal = intervalSource.getValue();
+            String colId = "";
+            if (srcVal != null && srcVal.startsWith("Vault: ")) {
+                String colName = srcVal.substring("Vault: ".length()).strip();
+                try {
+                    for (com.realityweaver.wallpaper.WallpaperCollection col : new com.realityweaver.wallpaper.WallpaperCollectionStore().list()) {
+                        if (col.name().equalsIgnoreCase(colName)) {
+                            colId = col.id();
+                            break;
+                        }
+                    }
+                } catch (Exception ignored) { }
+            }
+            automationService.setIntervalCycle(active, mins, colId);
+        };
+
+        intervalToggle.setOnAction(e -> updateIntervalSettings.run());
+        intervalMins.setOnAction(e -> {
+            if (intervalToggle.isSelected()) updateIntervalSettings.run();
+        });
+        intervalSource.setOnAction(e -> {
+            if (intervalToggle.isSelected()) updateIntervalSettings.run();
+        });
+
+        HBox intervalControls = new HBox(12, intervalToggle, new Label("every"), intervalMins, intervalSource, cycleNow);
+        intervalControls.setAlignment(Pos.CENTER_LEFT);
+
         VBox sections = new VBox(14,
-                createAutomationSection("Time of day", "Uses this PC's date and local clock. The latest saved time rule applies when RealityWeaver opens, then changes at each scheduled time.",
+                createAutomationSection("Interval Slideshow (Change every X minutes)",
+                        "Automatically cycles your desktop wallpaper every few minutes from your library or a chosen collection.",
+                        intervalControls, new VBox()),
+                createAutomationSection("Time of day", "Uses this PC's local clock. Changes at each scheduled time.",
                         new VBox(9, timePresets, timeForm), timeRulesList),
-                createAutomationSection("Weather", "Checks current weather about every 15 minutes. PC location is estimated from the internet connection; its approximate location is sent to ipapi.co and Open-Meteo. Turn this off to enter a city.",
+                createAutomationSection("Atmospheric weather (Open-Meteo)", "Checks live weather every 15 minutes. Automatically maps clear, cloudy, rainy, snowy, or stormy conditions.",
                         new VBox(9, automaticWeatherLocation, weatherForm), weatherRulesList),
-                createAutomationSection("Calendar event", "Calendar titles are checked locally. Classic Outlook is read from this PC when available; otherwise import a local .ics file. A matching wallpaper stays active while the event is underway.",
-                        new VBox(9, outlookCalendarEnabled, calendarFileRow, calendarForm), calendarRulesList));
+                createAutomationSection("Calendar events & meetings", "Reads Classic Outlook, local .ics files, or remote Google Calendar / webcal feeds. Wallpaper applies while matching meeting is underway.",
+                        new VBox(9, outlookCalendarEnabled, calendarFileRow, calendarUrlRow, calendarForm), calendarRulesList));
         VBox content = new VBox(18, title, description, statusCard, sections);
         content.setPadding(new Insets(20));
         content.setMaxWidth(Double.MAX_VALUE);
@@ -498,9 +680,10 @@ public final class WallpaperStudioView extends BorderPane {
     private void addCalendarAutomationRule() {
         Path calendar = automationService.calendarFile();
         boolean hasLocalCalendar = calendar != null && java.nio.file.Files.isRegularFile(calendar);
-        if (!automationService.isOutlookCalendarEnabled() && !hasLocalCalendar) {
-            showAlert(Alert.AlertType.WARNING, "Choose a calendar first",
-                    "Enable this PC's Outlook calendar or select a local .ics file.");
+        boolean hasRemoteCalendar = !automationService.calendarUrl().isBlank();
+        if (!automationService.isOutlookCalendarEnabled() && !hasLocalCalendar && !hasRemoteCalendar) {
+            showAlert(Alert.AlertType.WARNING, "Choose a calendar source first",
+                    "Enable this PC's Outlook calendar, provide a remote iCal feed, or select a local .ics file.");
             return;
         }
         try {
@@ -522,31 +705,59 @@ public final class WallpaperStudioView extends BorderPane {
     private void refreshAutomationRuleLists() {
         timeRulesList.getChildren().clear();
         for (WallpaperAutomationService.TimeRule rule : automationService.timeRules()) {
+            String target = (rule.collectionId() != null && !rule.collectionId().isBlank())
+                    ? "Collection: " + rule.collectionId()
+                    : (rule.wallpaper() != null ? rule.wallpaper().getFileName().toString() : "—");
             timeRulesList.getChildren().add(createAutomationRuleRow(
-                    rule.time() + " daily → " + rule.wallpaper().getFileName(),
+                    rule.enabled(),
+                    rule.time() + " daily → " + target,
+                    enabled -> automationService.setTimeRuleEnabled(rule.id(), enabled),
                     () -> automationService.removeTimeRule(rule.id())));
         }
 
         weatherRulesList.getChildren().clear();
         for (WallpaperAutomationService.WeatherRule rule : automationService.weatherRules()) {
+            String target = (rule.collectionId() != null && !rule.collectionId().isBlank())
+                    ? "Collection: " + rule.collectionId()
+                    : (rule.wallpaper() != null ? rule.wallpaper().getFileName().toString() : "—");
             weatherRulesList.getChildren().add(createAutomationRuleRow(
+                    rule.enabled(),
                     (rule.automaticLocation() ? "PC location (approx.)" : rule.city()) + " · " + rule.condition()
-                            + " → " + rule.wallpaper().getFileName(),
+                            + " → " + target,
+                    enabled -> automationService.setWeatherRuleEnabled(rule.id(), enabled),
                     () -> automationService.removeWeatherRule(rule.id())));
         }
 
         calendarRulesList.getChildren().clear();
         for (WallpaperAutomationService.CalendarRule rule : automationService.calendarRules()) {
+            String target = (rule.collectionId() != null && !rule.collectionId().isBlank())
+                    ? "Collection: " + rule.collectionId()
+                    : (rule.wallpaper() != null ? rule.wallpaper().getFileName().toString() : "—");
             calendarRulesList.getChildren().add(createAutomationRuleRow(
-                    "Title contains “" + rule.titleContains() + "” → " + rule.wallpaper().getFileName(),
+                    rule.enabled(),
+                    "Title contains “" + rule.titleContains() + "” → " + target,
+                    enabled -> automationService.setCalendarRuleEnabled(rule.id(), enabled),
                     () -> automationService.removeCalendarRule(rule.id())));
         }
     }
 
-    private HBox createAutomationRuleRow(String description, Runnable removeRule) {
+    private HBox createAutomationRuleRow(boolean enabled, String description,
+            java.util.function.Consumer<Boolean> onToggle, Runnable removeRule) {
+        CheckBox toggle = new CheckBox();
+        toggle.setSelected(enabled);
+        toggle.getStyleClass().add("automation-rule-toggle");
+        toggle.setOnAction(event -> {
+            onToggle.accept(toggle.isSelected());
+            if (automationEnabled.isSelected()) {
+                automationService.checkNow();
+            }
+        });
         Label text = new Label(description);
         text.setWrapText(true);
         text.getStyleClass().add("automation-rule-text");
+        if (!enabled) {
+            text.setOpacity(0.5);
+        }
         Button remove = new Button("×");
         remove.getStyleClass().add("automation-rule-remove");
         remove.setAccessibleText("Remove automation rule");
@@ -554,7 +765,7 @@ public final class WallpaperStudioView extends BorderPane {
             removeRule.run();
             refreshAutomationRuleLists();
         });
-        HBox row = new HBox(10, text, remove);
+        HBox row = new HBox(10, toggle, text, remove);
         row.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(text, Priority.ALWAYS);
         row.getStyleClass().add("automation-rule-row");
@@ -562,7 +773,12 @@ public final class WallpaperStudioView extends BorderPane {
     }
 
     private void updateAutomationStatus(String message) {
-        Runnable update = () -> automationStatus.setText(message);
+        Runnable update = () -> {
+            automationStatus.setText(message);
+            boolean override = automationService.isManualOverrideActive();
+            resumeAutomationButton.setVisible(override);
+            resumeAutomationButton.setManaged(override);
+        };
         if (Platform.isFxApplicationThread()) {
             update.run();
         } else {

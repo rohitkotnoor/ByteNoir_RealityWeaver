@@ -1,5 +1,6 @@
 package com.realityweaver.ui;
 
+import com.realityweaver.util.AppPreferences;
 import com.realityweaver.wallpaper.WallpaperAutomationService;
 import com.realityweaver.wallpaper.WallpaperCollection;
 import com.realityweaver.wallpaper.WallpaperCollectionExchange;
@@ -53,7 +54,7 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
     private final WallpaperCollectionExchange exchange;
     private final WallpaperAutomationService automationService;
     private final WallpaperService wallpaperService = new WallpaperService();
-    private final Preferences preferences = Preferences.userNodeForPackage(WallpaperCollectionView.class);
+    private final Preferences preferences = AppPreferences.forPackage(WallpaperCollectionView.class);
     private final WallpaperCycleStateStore cycleState = new WallpaperCycleStateStore(preferences);
     private final ScheduledExecutorService cycleScheduler = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "realityweaver-collection-cycle");
@@ -145,8 +146,9 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
                 return null;
             }
         });
-        Button addWallpaper = button("＋ Add wallpaper", this::addWallpaper);
-        HBox addRow = new HBox(8, libraryChoice, addWallpaper);
+        Button addWallpaper = button("＋ Add from library", this::addWallpaper);
+        Button importLocal = button("📁 Import local images", this::importLocalImages);
+        HBox addRow = new HBox(8, libraryChoice, addWallpaper, importLocal);
         addRow.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(libraryChoice, Priority.ALWAYS);
 
@@ -162,15 +164,19 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
         HBox actionRow = new HBox(8, export, importCollection, sortButton, shuffleApply);
         actionRow.setAlignment(Pos.CENTER_LEFT);
 
-        cycleInterval.getItems().setAll(15, 30, 60, 120);
-        cycleInterval.setValue(30);
+        cycleInterval.getItems().setAll(1, 2, 5, 10, 15, 30, 60, 120, 360, 720, 1440);
+        cycleInterval.setValue(1);
         cycleInterval.setConverter(new StringConverter<>() {
             @Override
             public String toString(Integer minutes) {
                 if (minutes == null) {
                     return "";
                 }
-                return minutes < 60 ? minutes + " minutes" : minutes / 60 + " hour" + (minutes == 60 ? "" : "s");
+                if (minutes < 60) {
+                    return minutes + " minute" + (minutes == 1 ? "" : "s");
+                }
+                int hours = minutes / 60;
+                return hours + " hour" + (hours == 1 ? "" : "s");
             }
 
             @Override
@@ -314,7 +320,7 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
                     String.CASE_INSENSITIVE_ORDER));
         }
         if (references.isEmpty()) {
-            wallpaperList.getChildren().add(emptyLabel("This collection is empty. Add wallpapers from My library."));
+            wallpaperList.getChildren().add(emptyLabel("This collection is empty. Add wallpapers from My library or import local images."));
         } else {
             for (WallpaperCollection.WallpaperReference reference : references) {
                 wallpaperList.getChildren().add(createWallpaperRow(collection, reference));
@@ -367,6 +373,7 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
                 store.removeWallpaper(collection.id(), reference.id());
                 renderSelectedCollection();
                 refreshCollections();
+                showStatus("Removed from collection (original local image file preserved).");
             } catch (IOException | RuntimeException failure) {
                 showStatus("Wallpaper could not be removed from the collection: " + safeMessage(failure));
             }
@@ -453,6 +460,35 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
         }
     }
 
+    private void importLocalImages() {
+        WallpaperCollection collection = selectedCollection();
+        if (collection == null) {
+            showStatus("Choose or create a collection first.");
+            return;
+        }
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Import local wallpaper images into “" + collection.name() + "”");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
+                "Wallpaper Images (*.png, *.jpg, *.jpeg, *.bmp)", "*.png", "*.jpg", "*.jpeg", "*.bmp"));
+        List<File> files = chooser.showOpenMultipleDialog(getScene() != null ? getScene().getWindow() : null);
+        if (files == null || files.isEmpty()) {
+            return;
+        }
+        int added = 0;
+        for (File file : files) {
+            Path path = file.toPath().toAbsolutePath().normalize();
+            library.add(path);
+            try {
+                store.addWallpaper(collection.id(), path, library);
+                added++;
+            } catch (Exception ignored) { }
+        }
+        refreshLibrary();
+        refreshCollections();
+        renderSelectedCollection();
+        showStatus("Imported " + added + " image" + (added == 1 ? "" : "s") + " into “" + collection.name() + "”.");
+    }
+
     private void exportCollection() {
         WallpaperCollection collection = selectedCollection();
         if (collection == null) {
@@ -535,16 +571,17 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
             return;
         }
         if (!automationService.isEnabled()) {
-            showStatus("Enable automatic wallpaper changes in the Automation tab before starting a cycle.");
-            return;
+            automationService.setEnabled(true, ignored -> { });
         }
+        automationService.resumeAutomation();
+
         List<WallpaperCollection.WallpaperReference> available = collection.wallpapers().stream()
                 .filter(WallpaperCollection.WallpaperReference::isAvailable).toList();
-        if (available.size() < 2) {
-            showStatus("Add at least two available wallpapers to cycle through this collection.");
+        if (available.isEmpty()) {
+            showStatus("Add at least one available wallpaper to cycle through this collection.");
             return;
         }
-        int minutes = cycleInterval.getValue() == null ? 30 : cycleInterval.getValue();
+        int minutes = cycleInterval.getValue() == null ? 1 : cycleInterval.getValue();
         cycleState.saveCycle(collection.id(), minutes);
         scheduleCycle(collection.id(), collection.name(), minutes);
     }
@@ -554,13 +591,13 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
             return;
         }
         WallpaperCycleStateStore.Cycle saved = cycleState.savedCycle();
-        if (saved == null || !automationService.isEnabled()) {
+        if (saved == null) {
             return;
         }
         try {
             WallpaperCollection collection = store.find(saved.collectionId());
             if (collection != null && collection.wallpapers().stream()
-                    .filter(WallpaperCollection.WallpaperReference::isAvailable).count() >= 2) {
+                    .anyMatch(WallpaperCollection.WallpaperReference::isAvailable)) {
                 selectedCollectionId = collection.id();
                 scheduleCycle(collection.id(), collection.name(), saved.intervalMinutes());
                 renderSelectedCollection();
@@ -577,15 +614,16 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
         }
         cycleInterval.setValue(minutes);
         startCycleButton.setText("Stop cycling");
+
+        // Immediately trigger the first cycle change so the user sees it work instantly!
+        cycleScheduler.execute(() -> cycleNext(collectionId, collectionName));
+
         cycleTask = cycleScheduler.scheduleWithFixedDelay(() -> cycleNext(collectionId, collectionName),
                 minutes, minutes, TimeUnit.MINUTES);
-        showStatus("Cycling “" + collectionName + "” every " + minutes + " minutes while automation is enabled.");
+        showStatus("Cycling active: changing “" + collectionName + "” every " + minutes + (minutes == 1 ? " minute." : " minutes."));
     }
 
     private void cycleNext(String collectionId, String collectionName) {
-        if (!automationService.isEnabled() || automationService.isManualOverrideActive()) {
-            return;
-        }
         try {
             WallpaperCollection collection = store.find(collectionId);
             if (collection == null) {
@@ -598,16 +636,30 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
             List<Path> available = collection.wallpapers().stream()
                     .map(WallpaperCollection.WallpaperReference::path)
                     .filter(path -> path != null && Files.isRegularFile(path)).toList();
-            if (available.size() < 2) {
-                showStatus("Cycling paused because fewer than two collection images are available.");
+            if (available.isEmpty()) {
+                showStatus("Cycling paused: no available collection images found.");
                 return;
             }
-            WallpaperCyclePlanner.Selection choice = WallpaperCyclePlanner.next(available,
-                    cycleState.recentIds(collectionId), library::stableId,
-                    java.util.concurrent.ThreadLocalRandom.current());
-            if (automationService.applyCollectionWallpaper(choice.path(), collectionName)) {
-                cycleState.saveRecentIds(collectionId, choice.recentIds());
+            Path chosen;
+            List<String> nextHistory = List.of();
+            if (available.size() == 1) {
+                chosen = available.get(0);
+            } else {
+                WallpaperCyclePlanner.Selection choice = WallpaperCyclePlanner.next(available,
+                        cycleState.recentIds(collectionId), library::stableId,
+                        java.util.concurrent.ThreadLocalRandom.current());
+                chosen = choice.path();
+                nextHistory = choice.recentIds();
             }
+
+            wallpaperService.apply(chosen);
+            if (!nextHistory.isEmpty()) {
+                cycleState.saveRecentIds(collectionId, nextHistory);
+            }
+            String fileName = chosen.getFileName().toString();
+            int mins = cycleInterval.getValue() == null ? 1 : cycleInterval.getValue();
+            showStatus("Cycling active: applied “" + fileName + "”. Next rotation in "
+                    + mins + (mins == 1 ? " minute." : " minutes."));
         } catch (IOException | RuntimeException failure) {
             showStatus("Collection cycling failed: " + safeMessage(failure));
         }
@@ -619,13 +671,11 @@ public final class WallpaperCollectionView extends BorderPane implements AutoClo
             current.cancel(false);
             cycleTask = null;
         }
+        startCycleButton.setText("Start cycling");
         if (clearSaved) {
             cycleState.clearCycle();
         }
-        startCycleButton.setText("Start cycling");
-        if (clearSaved) {
-            showStatus("Collection cycling stopped.");
-        }
+        showStatus("Cycling stopped.");
     }
 
     private void applyManually(Path path) {

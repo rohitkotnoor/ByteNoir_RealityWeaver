@@ -19,7 +19,8 @@ try {
     New-Item -ItemType Directory -Path $runtimeHome, $mavenUserHome, $mavenRepository -Force | Out-Null
 
     $homeOption = '-Duser.home="' + $runtimeHome + '"'
-    $env:JAVA_TOOL_OPTIONS = (@($previousJavaToolOptions, $homeOption) | Where-Object {
+    $prefOption = '-Djava.util.prefs.PreferencesFactory=com.realityweaver.util.FilePreferencesFactory'
+    $env:JAVA_TOOL_OPTIONS = (@($previousJavaToolOptions, $homeOption, $prefOption) | Where-Object {
         -not [string]::IsNullOrWhiteSpace($_)
     }) -join " "
 

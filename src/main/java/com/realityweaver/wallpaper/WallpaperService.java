@@ -1,5 +1,6 @@
 package com.realityweaver.wallpaper;
 
+import com.realityweaver.util.AppPreferences;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
@@ -14,6 +15,7 @@ import java.util.Iterator;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.prefs.Preferences;
 import javax.imageio.ImageIO;
@@ -27,7 +29,16 @@ public final class WallpaperService {
     private static final String FIT_PREFERENCE = "wallpaper.fit";
     private static final String RECENT_APPLIED_COUNT = "wallpaper.recentApplied.count";
     private static final int MAX_RECENT_APPLIED = 8;
-    private final Preferences preferences = Preferences.userNodeForPackage(WallpaperService.class);
+
+    private final Preferences preferences;
+
+    public WallpaperService() {
+        this(AppPreferences.forPackage(WallpaperService.class));
+    }
+
+    public WallpaperService(Preferences preferences) {
+        this.preferences = preferences != null ? preferences : AppPreferences.forPackage(WallpaperService.class);
+    }
 
     public enum WallpaperFit {
         FILL("Fill", "10"), FIT("Fit", "6"), STRETCH("Stretch", "2"), CENTER("Center", "0");
@@ -79,12 +90,30 @@ public final class WallpaperService {
             $currentWallpaper = [System.Text.StringBuilder]::new(260)
             $readBack = [RealityWeaverWallpaperNative]::GetDesktopWallpaper(
                 0x0073, [uint32]$currentWallpaper.Capacity, $currentWallpaper, 0)
-            if (-not $readBack -or -not [String]::Equals(
-                    $currentWallpaper.ToString(), $imagePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $applied) {
                 [Console]::Error.WriteLine('Windows did not confirm the requested wallpaper path.')
                 exit 1
             }
             exit 0
+            """;
+
+    private static final String WINDOWS_QUERY_SCRIPT = """
+            $ErrorActionPreference = 'Stop'
+            Add-Type -TypeDefinition @'
+            using System.Runtime.InteropServices;
+            using System.Text;
+            public static class RealityWeaverWallpaperQuery {
+                [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", CharSet = CharSet.Unicode, SetLastError = true)]
+                [return: MarshalAs(UnmanagedType.Bool)]
+                public static extern bool GetDesktopWallpaper(uint action, uint bufferSize, StringBuilder imagePath, uint flags);
+            }
+            '@
+            $currentWallpaper = [System.Text.StringBuilder]::new(260)
+            $ok = [RealityWeaverWallpaperQuery]::GetDesktopWallpaper(
+                0x0073, [uint32]$currentWallpaper.Capacity, $currentWallpaper, 0)
+            if ($ok -and $currentWallpaper.Length -gt 0) {
+                [Console]::Write($currentWallpaper.ToString())
+            }
             """;
 
     public void apply(Path imagePath) throws IOException {
@@ -120,6 +149,31 @@ public final class WallpaperService {
             }
         }
         return List.copyOf(result);
+    }
+
+    public Optional<Path> getCurrentWallpaper() {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("windows")) {
+            try {
+                String encodedScript = Base64.getEncoder().encodeToString(
+                        WINDOWS_QUERY_SCRIPT.getBytes(StandardCharsets.UTF_16LE));
+                Process process = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive",
+                        "-EncodedCommand", encodedScript).start();
+                if (process.waitFor(6, TimeUnit.SECONDS)) {
+                    String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+                    if (!output.isBlank()) {
+                        Path path = Path.of(output).toAbsolutePath().normalize();
+                        if (Files.isRegularFile(path)) {
+                            return Optional.of(path);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // Best effort native read
+            }
+        }
+        List<Path> recent = recentApplied();
+        return recent.isEmpty() ? Optional.empty() : Optional.of(recent.get(0));
     }
 
     public void apply(Path imagePath, WallpaperFit fit) throws IOException {

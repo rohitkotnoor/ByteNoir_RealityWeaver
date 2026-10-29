@@ -6,5 +6,9 @@ module com.realityweaver {
     requires com.google.gson;
 
     opens com.realityweaver.wallpaper to com.google.gson;
+    opens com.realityweaver.util to com.google.gson;
     exports com.realityweaver;
+    exports com.realityweaver.util;
+    exports com.realityweaver.wallpaper;
+    exports com.realityweaver.ui;
 }

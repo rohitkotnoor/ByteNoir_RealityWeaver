@@ -1,5 +1,6 @@
 package com.realityweaver.wallpaper;
 
+import com.realityweaver.util.AppPreferences;
 import java.util.List;
 import java.util.prefs.Preferences;
 
@@ -13,7 +14,7 @@ public final class WallpaperCycleStateStore {
     private final Preferences preferences;
 
     public WallpaperCycleStateStore() {
-        this(Preferences.userNodeForPackage(WallpaperCycleStateStore.class));
+        this(AppPreferences.forPackage(WallpaperCycleStateStore.class));
     }
 
     public WallpaperCycleStateStore(Preferences preferences) {

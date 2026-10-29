@@ -2,6 +2,8 @@ package com.realityweaver.ui;
 
 import com.realityweaver.AppSettings;
 import com.realityweaver.wallpaper.OnlineWallpaper;
+import com.realityweaver.wallpaper.WallpaperCollection;
+import com.realityweaver.wallpaper.WallpaperCollectionStore;
 import com.realityweaver.wallpaper.WallpaperLibrary;
 import com.realityweaver.wallpaper.WallpaperSearchService;
 import com.realityweaver.wallpaper.WallpaperService;
@@ -10,6 +12,7 @@ import java.awt.Desktop;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
 import java.util.List;
@@ -17,12 +20,15 @@ import java.util.LinkedHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.ChoiceDialog;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
@@ -43,12 +49,16 @@ public final class OnlineWallpaperView extends VBox {
             "Japanese anime", "Movie superstars", "Fashion models", "GTA 6 wallpaper",
             "Gods & mythology", "4K HD desktop");
 
+    private static final List<String> AESTHETIC_PRESETS = List.of(
+            "Lo-Fi Anime", "Dark Academia", "Studio Ghibli", "Cyberpunk Neon",
+            "Minimalist Pastel", "Cozy Coffee & Rain", "Cosmic Galaxy", "Nordic Mountain 4K");
+
     private final WallpaperSearchService searchService = new WallpaperSearchService();
     private final WallpaperLibrary library = new WallpaperLibrary();
     private final WallpaperService wallpaperService;
     private final Runnable onManualApplied;
     private final Consumer<Path> onSaved;
-    private final ExecutorService requests = Executors.newSingleThreadExecutor(runnable -> {
+    private final ExecutorService requests = Executors.newFixedThreadPool(4, runnable -> {
         Thread thread = new Thread(runnable, "realityweaver-wallpaper-search");
         thread.setDaemon(true);
         return thread;
@@ -60,8 +70,10 @@ public final class OnlineWallpaperView extends VBox {
     private final ComboBox<String> orientationFilter = new ComboBox<>();
     private final ComboBox<String> resolutionFilter = new ComboBox<>();
     private final Button searchButton = new Button("Search");
-    private final Button trendingButton = new Button("Trending");
-    private final Label statusLabel = new Label("Search for a destination or topic, or browse trending wallpapers.");
+    private final Button bingButton = new Button("Bing 4K Daily");
+    private final Button trendingButton = new Button("Wallhaven Top");
+    private final Button picsumButton = new Button("Curated Photos");
+    private final Label statusLabel = new Label("Search for a destination or topic, or browse Bing 4K and Wallhaven wallpapers.");
     private final Label resultCount = new Label();
     private final FlowPane resultGrid = new FlowPane(10, 10);
     private final StackPane previewFrame = new StackPane();
@@ -70,6 +82,8 @@ public final class OnlineWallpaperView extends VBox {
     private final Hyperlink sourceLink = new Hyperlink("Open image source page ↗");
     private final Button downloadButton = new Button("Download to library");
     private final Button applyButton = new Button("Set as Wallpaper");
+    private final Button addToCollectionButton = new Button("＋ Add to Collection");
+    private final Button fullPreviewButton = new Button("🔍 Full Details & Preview");
     private final Button loadMoreButton = new Button("Load more");
 
     private List<OnlineWallpaper> results = List.of();
@@ -79,7 +93,7 @@ public final class OnlineWallpaperView extends VBox {
     private int searchGeneration;
     private int currentPage;
     private String currentQuery = "";
-    private WallpaperSource currentSource = WallpaperSource.OPENVERSE;
+    private WallpaperSource currentSource = WallpaperSource.WALLHAVEN;
     private boolean currentTrending;
 
     public OnlineWallpaperView(Consumer<Path> onSaved) {
@@ -97,35 +111,55 @@ public final class OnlineWallpaperView extends VBox {
         VBox.setVgrow(getChildren().get(3), Priority.ALWAYS);
         statusLabel.setWrapText(true);
         statusLabel.getStyleClass().add("online-status");
-        showPreviewPlaceholder("Search to find wallpaper images");
+        showPreviewPlaceholder("Select an image to preview or apply as desktop wallpaper");
         renderResults();
+
+        // Automatically fetch initial batch so Discover is never an empty canvas
+        Platform.runLater(this::searchTrending);
     }
 
     private HBox createSearchBar() {
         sourceSelector.setItems(FXCollections.observableArrayList(WallpaperSource.values()));
-        sourceSelector.setValue(WallpaperSource.OPENVERSE);
-        sourceSelector.setPrefWidth(205);
+        sourceSelector.setValue(WallpaperSource.WALLHAVEN);
+        sourceSelector.setPrefWidth(215);
         sourceSelector.getStyleClass().add("online-source-selector");
 
-        searchField.setPromptText("Try anime, GTA 6, movie superstars, gods, Kyoto, or mountains");
+        searchField.setPromptText("Search anime, cyberpunk, nature, gaming, mountains, or aesthetic...");
         searchField.setOnAction(event -> search());
         HBox.setHgrow(searchField, Priority.ALWAYS);
 
-        searchButton.getStyleClass().add("quiet-button");
+        searchButton.getStyleClass().add("primary-button");
         searchButton.setOnAction(event -> search());
+
+        bingButton.getStyleClass().add("quiet-button");
+        bingButton.setOnAction(event -> searchBing());
+
         trendingButton.getStyleClass().add("quiet-button");
         trendingButton.setOnAction(event -> searchTrending());
-        return new HBox(10, sourceSelector, searchField, searchButton, trendingButton);
+
+        picsumButton.getStyleClass().add("quiet-button");
+        picsumButton.setOnAction(event -> searchPicsum());
+
+        return new HBox(8, sourceSelector, searchField, searchButton, bingButton, trendingButton, picsumButton);
     }
 
     private VBox createExploreRow() {
+        FlowPane aestheticRow = new FlowPane(8, 8);
+        aestheticRow.setAlignment(Pos.CENTER_LEFT);
+        Label aestheticLabel = new Label("Pinterest Vibes:");
+        aestheticLabel.getStyleClass().add("online-result-details");
+        aestheticRow.getChildren().add(aestheticLabel);
+        for (String preset : AESTHETIC_PRESETS) {
+            aestheticRow.getChildren().add(createSuggestionButton(preset, WallpaperSource.WALLHAVEN));
+        }
+
         FlowPane placesRow = new FlowPane(8, 8);
         placesRow.setAlignment(Pos.CENTER_LEFT);
-        Label placesLabel = new Label("Places:");
+        Label placesLabel = new Label("Destinations:");
         placesLabel.getStyleClass().add("online-result-details");
         placesRow.getChildren().add(placesLabel);
-        for (String place : List.of("Kyoto", "Iceland", "Santorini", "Patagonia", "New York")) {
-            placesRow.getChildren().add(createSuggestionButton(place));
+        for (String place : List.of("Kyoto", "Iceland", "Santorini", "Patagonia", "Tokyo Night")) {
+            placesRow.getChildren().add(createSuggestionButton(place, null));
         }
 
         FlowPane categoriesRow = new FlowPane(8, 8);
@@ -142,13 +176,9 @@ public final class OnlineWallpaperView extends VBox {
             categoriesRow.getChildren().add(createSuggestionButton(category, suggestedSource));
         }
 
-        VBox row = new VBox(8, placesRow, categoriesRow);
+        VBox row = new VBox(6, aestheticRow, placesRow, categoriesRow);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
-    }
-
-    private Button createSuggestionButton(String value) {
-        return createSuggestionButton(value, null);
     }
 
     private Button createSuggestionButton(String value, WallpaperSource suggestedSource) {
@@ -166,7 +196,7 @@ public final class OnlineWallpaperView extends VBox {
 
     private Label createSourceNote() {
         Label note = new Label(
-                "Wallhaven is set to safe results and is recommended for anime, movie superstars, models, gaming, GTA 6, gods, and 4K HD searches. Openverse, Commons, NASA Images, and public-domain art are available too.");
+                "Bing 4K UHD, Picsum, and Wallhaven provide direct wallpaper feeds with no key needed. Pexels and Pixabay keys can be configured in Settings.");
         note.setWrapText(true);
         note.getStyleClass().add("commons-note");
         return note;
@@ -240,6 +270,12 @@ public final class OnlineWallpaperView extends VBox {
         previewFrame.setMinHeight(230);
         previewFrame.setPrefHeight(260);
         previewFrame.getStyleClass().add("wallpaper-preview");
+        previewFrame.setCursor(javafx.scene.Cursor.HAND);
+        previewFrame.setOnMouseClicked(event -> {
+            if (selected != null) {
+                openFullPreview(selected);
+            }
+        });
 
         selectedTitle.getStyleClass().add("wallpaper-selected-name");
         selectedTitle.setWrapText(true);
@@ -250,46 +286,68 @@ public final class OnlineWallpaperView extends VBox {
         sourceLink.getStyleClass().add("commons-link");
         sourceLink.setOnAction(event -> openSourcePage());
 
-        downloadButton.getStyleClass().add("primary-button");
-        downloadButton.setDisable(true);
-        downloadButton.setMaxWidth(Double.MAX_VALUE);
-        downloadButton.setOnAction(event -> downloadSelected());
-        applyButton.getStyleClass().add("quiet-button");
+        applyButton.getStyleClass().add("primary-button");
         applyButton.setDisable(true);
         applyButton.setMaxWidth(Double.MAX_VALUE);
         applyButton.setOnAction(event -> applySelected());
 
-        VBox panel = new VBox(11,
+        downloadButton.getStyleClass().add("quiet-button");
+        downloadButton.setDisable(true);
+        downloadButton.setMaxWidth(Double.MAX_VALUE);
+        downloadButton.setOnAction(event -> downloadSelected());
+
+        addToCollectionButton.getStyleClass().add("quiet-button");
+        addToCollectionButton.setDisable(true);
+        addToCollectionButton.setMaxWidth(Double.MAX_VALUE);
+        addToCollectionButton.setOnAction(event -> addSelectedToCollection());
+
+        fullPreviewButton.getStyleClass().add("quiet-button");
+        fullPreviewButton.setDisable(true);
+        fullPreviewButton.setMaxWidth(Double.MAX_VALUE);
+        fullPreviewButton.setOnAction(event -> openFullPreview(selected));
+
+        VBox panel = new VBox(10,
                 previewTitleLabel,
                 previewFrame,
                 selectedTitle,
                 selectedMetadata,
                 sourceLink,
+                applyButton,
                 downloadButton,
-                applyButton);
+                addToCollectionButton,
+                fullPreviewButton);
         panel.getStyleClass().add("online-preview-panel");
         return panel;
     }
 
     private void search() {
         String query = searchField.getText().strip();
-        if (query.isBlank()) {
-            statusLabel.setText("Enter a search term first.");
-            return;
+        WallpaperSource source = sourceSelector.getValue();
+        if (source == null) {
+            source = WallpaperSource.WALLHAVEN;
         }
 
         String category = searchCategory.getValue();
-        if (category != null && !category.equals("Any topic")) {
-            query += " " + category;
+        if (category != null && !category.equals("Any topic") && !query.contains(category)) {
+            query = query.isBlank() ? category : query + " " + category;
         }
 
-        WallpaperSource source = sourceSelector.getValue();
-        runSearch(query, source == null ? WallpaperSource.OPENVERSE : source, false, 1);
+        runSearch(query, source, false, 1);
     }
 
     private void searchTrending() {
         sourceSelector.setValue(WallpaperSource.WALLHAVEN);
         runSearch("", WallpaperSource.WALLHAVEN, true, 1);
+    }
+
+    private void searchBing() {
+        sourceSelector.setValue(WallpaperSource.BING_UHD);
+        runSearch("", WallpaperSource.BING_UHD, false, 1);
+    }
+
+    private void searchPicsum() {
+        sourceSelector.setValue(WallpaperSource.PICSUM);
+        runSearch("", WallpaperSource.PICSUM, false, 1);
     }
 
     private void runSearch(String query, WallpaperSource source, boolean trending, int page) {
@@ -312,13 +370,17 @@ public final class OnlineWallpaperView extends VBox {
 
         searchButton.setDisable(true);
         trendingButton.setDisable(true);
+        bingButton.setDisable(true);
+        picsumButton.setDisable(true);
         loadMoreButton.setDisable(true);
-        statusLabel.setText(trending ? "Finding this month's top wallpapers…" : "Searching " + source + "…");
+        statusLabel.setText(trending ? "Finding this month's top Wallhaven wallpapers…" : "Searching " + source + "…");
         if (page == 1) {
-            resultGrid.getChildren().setAll(messageRow(trending ? "Loading trending wallpapers…" : "Searching…"));
+            resultGrid.getChildren().setAll(messageRow(trending ? "Loading trending wallpapers…" : "Searching " + source + "…"));
         }
         downloadButton.setDisable(true);
         applyButton.setDisable(true);
+        addToCollectionButton.setDisable(true);
+        fullPreviewButton.setDisable(true);
         sourceLink.setDisable(true);
         showPreviewPlaceholder(trending ? "Loading trending wallpapers" : "Loading search results");
 
@@ -338,6 +400,8 @@ public final class OnlineWallpaperView extends VBox {
             }
             searchButton.setDisable(false);
             trendingButton.setDisable(false);
+            bingButton.setDisable(false);
+            picsumButton.setDisable(false);
             List<OnlineWallpaper> pageResults = task.getValue();
             if (page == 1) {
                 results = pageResults;
@@ -350,7 +414,7 @@ public final class OnlineWallpaperView extends VBox {
             currentPage = page;
             loadMoreButton.setDisable(pageResults.isEmpty());
             statusLabel.setText(results.isEmpty()
-                    ? "No supported images found. Try another topic or source."
+                    ? "No supported images found. Try another topic or provider."
                     : trending ? "Wallhaven monthly toplist. Select a result to preview or apply it."
                             : page > 1 ? "Loaded more results. Select a wallpaper to preview or apply it."
                                     : "Select a result to preview or apply it.");
@@ -365,11 +429,13 @@ public final class OnlineWallpaperView extends VBox {
             }
             searchButton.setDisable(false);
             trendingButton.setDisable(false);
+            bingButton.setDisable(false);
+            picsumButton.setDisable(false);
             loadMoreButton.setDisable(page == 1);
             if (page == 1) {
                 results = List.of();
-                resultCount.setText("");
-                statusLabel.setText("Search failed: " + errorMessage(task.getException()));
+                statusLabel.setText("Search failed: " + errorMessage(task.getException())
+                        + " (Local collections and saved wallpapers remain accessible).");
             } else {
                 statusLabel.setText("Could not load another page: " + errorMessage(task.getException()));
             }
@@ -386,7 +452,7 @@ public final class OnlineWallpaperView extends VBox {
                 .toList();
         resultCount.setText(results.isEmpty() ? "" : visible.size() + " shown · " + results.size() + " loaded");
         if (results.isEmpty()) {
-            resultGrid.getChildren().add(messageRow("No results yet. Search a destination or browse trending wallpapers."));
+            resultGrid.getChildren().add(messageRow("No results yet. Search a topic or click Bing 4K, Wallhaven Top, or Curated Photos above."));
             return;
         }
         if (visible.isEmpty()) {
@@ -396,18 +462,51 @@ public final class OnlineWallpaperView extends VBox {
 
         for (OnlineWallpaper wallpaper : visible) {
             ImageView imageView = new ImageView();
-            if ("https".equalsIgnoreCase(wallpaper.thumbnailUri().getScheme())) {
-                Image image = new Image(wallpaper.thumbnailUri().toString(), 224, 132, true, true, true);
-                imageView.setImage(image);
-            }
             imageView.setFitWidth(224);
             imageView.setFitHeight(132);
             imageView.setPreserveRatio(true);
-            StackPane imageMark = new StackPane(imageView);
+            imageView.setSmooth(true);
+
+            Label placeholderLabel = new Label("Loading preview…");
+            placeholderLabel.getStyleClass().add("online-result-details");
+            StackPane imageMark = new StackPane(placeholderLabel, imageView);
             imageMark.getStyleClass().add("online-result-mark");
             imageMark.setMinHeight(132);
             imageMark.setPrefHeight(132);
             imageMark.setMaxWidth(Double.MAX_VALUE);
+
+            // Asynchronous on-disk cache + HTTP header fetching
+            Path cached = searchService.getCachedThumbnailPath(wallpaper.thumbnailUri());
+            if (cached != null && Files.isRegularFile(cached)) {
+                try {
+                    Image image = new Image(cached.toUri().toString(), 224, 132, true, true, false);
+                    imageView.setImage(image);
+                    placeholderLabel.setVisible(false);
+                } catch (Exception ignored) { }
+            } else {
+                requests.execute(() -> {
+                    try {
+                        byte[] data = searchService.fetchThumbnail(wallpaper);
+                        if (data != null && data.length > 0) {
+                            Image image = new Image(new ByteArrayInputStream(data), 224, 132, true, true);
+                            Platform.runLater(() -> {
+                                imageView.setImage(image);
+                                placeholderLabel.setVisible(false);
+                            });
+                        }
+                    } catch (Exception ignored) {
+                        Platform.runLater(() -> {
+                            try {
+                                Image direct = new Image(wallpaper.thumbnailUri().toString(), 224, 132, true, true, true);
+                                imageView.setImage(direct);
+                                placeholderLabel.setVisible(false);
+                            } catch (Exception e) {
+                                placeholderLabel.setText("Preview unavailable");
+                            }
+                        });
+                    }
+                });
+            }
 
             Label title = new Label(wallpaper.title());
             title.setWrapText(true);
@@ -424,15 +523,28 @@ public final class OnlineWallpaperView extends VBox {
             metadata.getStyleClass().add("online-result-details");
             metadata.setWrapText(true);
             metadata.setMaxHeight(34);
+
             Button preview = new Button("Preview");
             preview.getStyleClass().add("quiet-button");
-            preview.setMaxWidth(Double.MAX_VALUE);
             preview.setOnAction(event -> selectResult(wallpaper));
+
+            Button setQuick = new Button("Set Wallpaper");
+            setQuick.getStyleClass().add("primary-button");
+            setQuick.setOnAction(event -> {
+                selectResult(wallpaper);
+                applySelected();
+            });
+
+            HBox actions = new HBox(6, preview, setQuick);
+            HBox.setHgrow(preview, Priority.ALWAYS);
+            HBox.setHgrow(setQuick, Priority.ALWAYS);
+
             Button favorite = new Button("☆ Save as favorite");
             favorite.getStyleClass().add("favorite-action-button");
             favorite.setMaxWidth(Double.MAX_VALUE);
             favorite.setOnAction(event -> saveResultAsFavorite(wallpaper, favorite));
-            VBox card = new VBox(8, imageMark, title, metadata, preview, favorite);
+
+            VBox card = new VBox(8, imageMark, title, metadata, actions, favorite);
             card.setPrefWidth(248);
             card.setMaxWidth(248);
             card.setPadding(new Insets(10));
@@ -443,6 +555,9 @@ public final class OnlineWallpaperView extends VBox {
             card.setOnMouseClicked(event -> {
                 if (!(event.getTarget() instanceof Button)) {
                     selectResult(wallpaper);
+                    if (event.getClickCount() == 2) {
+                        openFullPreview(wallpaper);
+                    }
                 }
             });
             resultGrid.getChildren().add(card);
@@ -508,6 +623,134 @@ public final class OnlineWallpaperView extends VBox {
         requests.execute(task);
     }
 
+    private void addSelectedToCollection() {
+        if (selected == null) {
+            return;
+        }
+        WallpaperCollectionStore store = new WallpaperCollectionStore();
+        List<WallpaperCollection> collections;
+        try {
+            collections = store.list();
+        } catch (IOException failure) {
+            statusLabel.setText("Collections could not be opened: " + safeMessage(failure));
+            return;
+        }
+        if (collections.isEmpty()) {
+            statusLabel.setText("No collections found. Create a collection in the Collections tab first.");
+            return;
+        }
+        ChoiceDialog<WallpaperCollection> dialog = new ChoiceDialog<>(collections.get(0), collections);
+        dialog.setTitle("Add to Collection");
+        dialog.setHeaderText("Add “" + selected.title() + "” to a collection");
+        dialog.setContentText("Select collection:");
+        if (getScene() != null) {
+            dialog.initOwner(getScene().getWindow());
+        }
+        dialog.getDialogPane().getStylesheets().add(getClass().getResource("/styles/app.css").toExternalForm());
+        dialog.getDialogPane().getStyleClass().add("world-dialog");
+        dialog.showAndWait().ifPresent(chosenCollection -> {
+            OnlineWallpaper chosen = selected;
+            String safeName = chosen.suggestedFileName().replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
+            Path target = Path.of(System.getProperty("user.home"), ".realityweaver", "wallpaper-library",
+                UUID.randomUUID() + "-" + safeName).toAbsolutePath().normalize();
+            addToCollectionButton.setDisable(true);
+            statusLabel.setText("Downloading image for collection “" + chosenCollection.name() + "”…");
+            Task<Path> task = new Task<>() {
+                @Override
+                protected Path call() throws Exception {
+                    searchService.download(chosen, target);
+                    return target;
+                }
+            };
+            task.setOnSucceeded(event -> {
+                addToCollectionButton.setDisable(false);
+                Path saved = task.getValue();
+                library.add(saved);
+                library.setAttribution(saved, chosen.attribution());
+                library.setSourceMetadata(saved, chosen);
+                try {
+                    store.addWallpaper(chosenCollection.id(), saved, library);
+                    statusLabel.setText("Added to collection “" + chosenCollection.name() + "” with attribution!");
+                } catch (Exception ex) {
+                    statusLabel.setText("Saved to library, but could not link to collection: " + ex.getMessage());
+                }
+                onSaved.accept(saved);
+            });
+            task.setOnFailed(event -> {
+                addToCollectionButton.setDisable(false);
+                statusLabel.setText("Download failed: " + errorMessage(task.getException()));
+            });
+            requests.execute(task);
+        });
+    }
+
+    private void openFullPreview(OnlineWallpaper wallpaper) {
+        if (wallpaper == null) {
+            return;
+        }
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Wallpaper Preview & Details");
+        dialog.setHeaderText(null);
+        if (getScene() != null) {
+            dialog.initOwner(getScene().getWindow());
+        }
+        dialog.getDialogPane().getButtonTypes().add(javafx.scene.control.ButtonType.CLOSE);
+        dialog.getDialogPane().getStylesheets().add(getClass().getResource("/styles/app.css").toExternalForm());
+        dialog.getDialogPane().getStyleClass().add("world-dialog");
+
+        ImageView fullView = new ImageView();
+        fullView.setPreserveRatio(true);
+        fullView.setFitWidth(660);
+        fullView.setFitHeight(380);
+
+        Label loading = new Label("Loading image preview…");
+        loading.getStyleClass().add("online-status");
+        StackPane imagePane = new StackPane(loading, fullView);
+        imagePane.setMinSize(660, 380);
+        imagePane.getStyleClass().add("wallpaper-preview");
+
+        Task<byte[]> imgTask = new Task<>() {
+            @Override
+            protected byte[] call() throws Exception {
+                return searchService.fetchThumbnail(wallpaper);
+            }
+        };
+        imgTask.setOnSucceeded(ev -> {
+            Image img = new Image(new ByteArrayInputStream(imgTask.getValue()));
+            fullView.setImage(img);
+            loading.setVisible(false);
+        });
+        requests.execute(imgTask);
+
+        Label title = new Label(wallpaper.title());
+        title.getStyleClass().add("wallpaper-selected-name");
+        Label meta = new Label(metadataText(wallpaper));
+        meta.getStyleClass().add("online-metadata");
+        Hyperlink link = new Hyperlink("Open original source page ↗");
+        link.getStyleClass().add("commons-link");
+        link.setOnAction(e -> {
+            try {
+                if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                    Desktop.getDesktop().browse(wallpaper.descriptionUri());
+                }
+            } catch (Exception ignored) { }
+        });
+
+        Button applyQuick = new Button("Set as Wallpaper Directly");
+        applyQuick.getStyleClass().add("primary-button");
+        applyQuick.setOnAction(e -> {
+            dialog.close();
+            selectResult(wallpaper);
+            applySelected();
+        });
+
+        VBox content = new VBox(12, imagePane, title, meta, link, applyQuick);
+        content.setPadding(new Insets(16));
+        content.setPrefWidth(700);
+        dialog.getDialogPane().setContent(content);
+        dialog.showAndWait();
+    }
+
     private HBox messageRow(String message) {
         Label text = new Label(message);
         text.setWrapText(true);
@@ -521,6 +764,8 @@ public final class OnlineWallpaperView extends VBox {
         selected = wallpaper;
         downloadButton.setDisable(false);
         applyButton.setDisable(false);
+        addToCollectionButton.setDisable(false);
+        fullPreviewButton.setDisable(false);
         sourceLink.setDisable(false);
         selectedTitle.setText(wallpaper.title());
         selectedMetadata.setText(metadataText(wallpaper));
@@ -555,7 +800,7 @@ public final class OnlineWallpaperView extends VBox {
             imageView.setPreserveRatio(true);
             imageView.setSmooth(true);
             previewFrame.getChildren().setAll(imageView);
-            statusLabel.setText("Preview ready. Check the credit and license before saving.");
+            statusLabel.setText("Preview ready. Click preview to inspect full size.");
         });
         task.setOnFailed(event -> {
             if (chosen.equals(selected)) {
@@ -685,5 +930,9 @@ public final class OnlineWallpaperView extends VBox {
             return "Please check your internet connection and try again.";
         }
         return error.getMessage();
+    }
+
+    private String safeMessage(Throwable failure) {
+        return failure == null || failure.getMessage() == null ? "Unknown issue" : failure.getMessage();
     }
 }

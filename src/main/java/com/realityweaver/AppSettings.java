@@ -1,5 +1,6 @@
 package com.realityweaver;
 
+import com.realityweaver.util.AppPreferences;
 import java.util.List;
 import java.util.prefs.Preferences;
 
@@ -9,7 +10,7 @@ public final class AppSettings {
     private static final String DEFAULT_TOPIC = "wallpaper.defaultTopic";
     private static final List<String> TOPICS = List.of(
             "Any topic", "Nature", "Architecture", "Space", "Games", "Animals", "Vehicles");
-    private static final Preferences PREFERENCES = Preferences.userNodeForPackage(AppSettings.class);
+    private static final Preferences PREFERENCES = AppPreferences.forPackage(AppSettings.class);
 
     private AppSettings() {
     }

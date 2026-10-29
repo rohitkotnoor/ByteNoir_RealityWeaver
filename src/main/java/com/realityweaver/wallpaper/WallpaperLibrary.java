@@ -1,5 +1,6 @@
 package com.realityweaver.wallpaper;
 
+import com.realityweaver.util.AppPreferences;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,7 +24,7 @@ public final class WallpaperLibrary {
     private final Preferences preferences;
 
     public WallpaperLibrary() {
-        this(Preferences.userNodeForPackage(WallpaperLibrary.class));
+        this(AppPreferences.forPackage(WallpaperLibrary.class));
     }
 
     WallpaperLibrary(Preferences preferences) {

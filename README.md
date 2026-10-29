@@ -1,58 +1,138 @@
-# RealityWeaver
+# RealityWeaver — Smart Desktop Wallpaper Studio
 
-RealityWeaver is a Java 21 and JavaFX desktop studio for finding wallpapers, keeping a local image library, making named collections, and changing the desktop background automatically.
+RealityWeaver is a smart desktop wallpaper manager and creative environment built with **Java 21** and **JavaFX**. It combines multi-provider wallpaper discovery, direct desktop application, wallpaper vaults (collections), dynamic atmospheric time/weather/calendar automation, and background system-tray execution.
 
-## Open the application
+---
 
-On Windows, the portable bundle is produced by the developer packaging script:
+## Quickstart & Launch Commands
+
+### Running the Application
+
+Launch RealityWeaver in development mode with a single command:
+
+```powershell
+.\run.ps1
+```
+
+Or using Maven wrapper directly:
+
+```powershell
+.\mvnw.cmd javafx:run
+```
+
+### Running the Test Suite
+
+Execute the full automated test suite (35 unit tests covering persistence, discovery, caching, rules, and collections):
+
+```powershell
+.\mvnw.cmd test
+```
+
+### Building the Native Windows Package
+
+Create a self-contained portable Windows package with bundled Java runtime under `target\dist\RealityWeaver\RealityWeaver.exe`:
 
 ```powershell
 .\package-windows.ps1
 ```
 
-The bundled application is written to `target\dist\RealityWeaver\RealityWeaver.exe`. Copy the complete `RealityWeaver` folder to a location you control, then double-click `RealityWeaver.exe`. It includes a Java runtime and does not open a console window. The app image is portable; it does not create an installer or shortcuts.
+---
 
-To create an installer with Start Menu and desktop shortcuts, run `.\package-windows.ps1 -PackageType exe` or use `msi`. This requires JDK 21 and WiX Toolset 3.x (`candle.exe` and `light.exe`) on the build machine. The script builds the app and runs the Maven tests before packaging. `jpackage` creates the Windows package on Windows; Linux and macOS bundles must be built on their respective platforms and have not been verified here.
+## Softablitz Requirements Implementation
 
-## First launch and everyday use
+### B1. The Multiversal Portal — Discover & Explore Wallpapers
 
-The first launch opens a short setup wizard. Choose a starting wallpaper topic and image fit, configure optional weather or calendar access, or skip setup. RealityWeaver opens a local workspace without requiring an account. Sign-in and registration remain available from the profile control.
+RealityWeaver provides external wallpaper discovery across 5 providers with a provider abstraction:
 
-The Home screen links to wallpaper discovery, your library, collections, and automation. In the wallpaper studio:
+- **Providers Supported**:
+  - **Openverse**: Millions of Creative Commons and public domain photos.
+  - **Wikimedia Commons**: High-resolution encyclopedic photography and art.
+  - **Wallhaven**: Curated desktop wallpapers (including 4K/8K, anime, and toplists).
+  - **NASA Images**: Astronomical and space exploration imagery from NASA's archives.
+  - **Art Institute of Chicago**: Classical fine art and paintings in the public domain.
+- **Search & Filtering**: Search by keyword with curated category pills (Anime, Nature, Cyberpunk, Space, Architecture, Minimal, Fantasy).
+- **High-Resolution Thumbnails & On-Disk Caching**: Thumbnails are fetched and cached in `~/.realityweaver/thumbnail-cache/` with SHA-256 keys to conserve bandwidth and speed up browsing. The cache size can be inspected and cleared from Settings.
+- **Detailed Previews & Attribution**: Each wallpaper card offers a high-res inspection dialog detailing dimensions, author/photographer, license, source provider, and clickable links to the original landing page.
+- **Offline Resilience**: When disconnected from the internet, local libraries and saved collections remain accessible and functional.
 
-- **Discover** searches supported public image libraries, shows image previews and available creator/license/source details, and supports loading more results. Quick searches include Japanese anime, movie superstars, fashion models, GTA 6, gods and mythology, and 4K HD desktop wallpapers.
-- **My Wallpapers** imports local images, previews them, organizes favorites by category, and shows recently opened wallpapers.
-- **Collections** creates, renames, and deletes named collections; adds or removes images; marks favorites; shuffles and cycles through a collection; and imports or exports JSON manifests and ZIP archives.
-- **Automation** manages daily time rules, weather rules, local `.ics` calendar rules, and the Windows Classic Outlook calendar where available. Automation runs while RealityWeaver is running, including in the system tray where the desktop supports it.
-- **Settings** controls desktop image fit, shows where local data is stored, opens that folder, and can add or remove a Windows sign-in shortcut in the packaged app. Optional integration details are listed there too.
+### B2. Reality Manifestation — Apply Wallpapers Directly to the Desktop
 
-Choose **Set as Wallpaper** to apply an image. Windows, macOS, and GNOME-based Linux have platform handlers. Fit options are supported on Windows and GNOME; macOS uses its desktop scaling behavior. Other Linux desktop environments and operating systems report that automatic application is unsupported.
+Wallpapers are applied directly to the operating system's desktop background without external scripts:
 
-Weather checks use Open-Meteo. A weather rule can use a city or, with explicit consent, an approximate location from the internet connection (ipapi.co). Calendar access is optional: select a local `.ics` file, or enable the default calendar from Classic Outlook on Windows if it is installed. If an optional source is unavailable, the rest of the app remains usable.
+- **Windows Native Application**: Uses Win32 `SystemParametersInfoW` (`SPI_SETDESKWALLPAPER = 0x0014`) via safe non-blocking PowerShell execution with flags `0x0003` (`SPIF_UPDATEINIFILE | SPIF_SENDCHANGE`).
+- **Active Wallpaper Detection**: Queries the current desktop wallpaper from Windows (`GetDesktopWallpaper` 0x0073) and displays it inside the application dashboard in a desktop monitor mockup.
+- **Display Modes (Fit / Scaling)**: Configurable scaling modes:
+  - **Fill** (crop to screen aspect ratio)
+  - **Fit** (letterbox to maintain full image)
+  - **Stretch** (stretch to full resolution)
+  - **Center** (1:1 pixel rendering at screen center)
+- **Image Safety Validation**: Checks file validity, format (PNG, JPG, BMP, GIF), and dimensions before applying.
+- **Cross-Platform Abstraction**: Isolated behind `WallpaperService`, with platform support for Windows, macOS (`osascript`), and Linux GNOME (`gsettings`).
 
-## Saved data
+### B3. The Sanctum of Memories — Collections & Wallpaper Vaults
 
-Collections, world drafts, local account records, downloaded wallpapers, and imported archive images are stored under `%USERPROFILE%\.realityweaver`. Applied Windows-compatible wallpaper copies and generated world-memory wallpapers are stored in the user’s `Pictures\RealityWeaver` folder. Preferences and automation rules are stored in the current user’s Java preferences. World drafts keep the photo’s original local path; imported source images stay where they were selected. Removing a photo from a collection does not delete its original file. Export a ZIP with images to share a self-contained collection. Keep the complete data folders when upgrading or moving the app.
+Users can organize, manage, and cycle named wallpaper vaults:
 
-The app must be running for time, weather, calendar, and collection-cycle automation to execute. Closing from the tray menu exits the app; closing the main window hides it when the system tray is available. Saved rules resume when the app next starts. On the packaged Windows app, you can optionally start RealityWeaver when you sign in.
+- **Collection Management**: Create, rename, delete vaults with safety confirmations.
+- **Adding & Removing**: Add external discovery images or import local files. Removing an image from a collection only removes the reference; original local files are never deleted.
+- **Local Multi-File Import**: Direct multi-file picker to import folders of images into collections.
+- **Automated Slideshow / Cycle**: Configurable rotation intervals (1 min, 5 min, 15 min, 30 min, 1 hour, 2 hours, 6 hours, 12 hours, 24 hours).
+- **Shuffling with History**: Fisher-Yates shuffle algorithm with history tracking ensures all wallpapers cycle before repeating.
+- **Portability (Export / Import)**: Export collections as portable `.rwcollection` JSON manifests or full self-contained ZIP archives with images.
+- **Durable Local Persistence**: Collections are persisted as JSON files under `~/.realityweaver/collections/`.
 
-## Developer commands
+### A1. The Eye of Agamotto — Time- and Weather-Aware Automation
 
-Requirements: JDK 21 and network access to Maven Central the first time dependencies are needed.
+A rule-based automation engine that reacts dynamically to local clock and atmospheric weather:
 
-```powershell
-.\run.ps1              # open the JavaFX app
-.\run.ps1 test         # run the test suite
-.\run.ps1 clean package
-.\package-windows.ps1  # build tests and a Windows app image with bundled Java
-```
+- **Local Time Rules**: Schedule specific wallpapers or collections for exact times of day (e.g. 06:00 Morning, 18:00 Evening, 21:00 Night).
+- **Atmospheric Weather Rules (Open-Meteo)**: Real-time weather fetched every 15 minutes from Open-Meteo (Clear, Cloudy, Rain, Snow, Fog, Storm). No API key required.
+- **Geolocation**: Supports either automatic location estimation (via internet IP) or explicit city name input.
+- **Per-Rule Toggles**: Every rule can be enabled or disabled via checkboxes without having to delete and re-create it.
+- **Collection Mapping**: Rules can map to a specific wallpaper or a collection vault to rotate through.
+- **Manual Override & Resumption**: When a user manually sets a wallpaper, automation pauses for 1 hour. A **Resume Automation** button allows users to immediately return to automatic adaptation.
+- **Predictable Precedence**: Rules evaluate with strict deterministic hierarchy:
+  1. *Calendar Meeting Event* (highest priority while meeting is active)
+  2. *Live Weather Condition*
+  3. *Local Time of Day*
+- **Repeat Prevention**: Prevents unnecessary disk writes or OS desktop re-renders when nothing relevant has changed.
 
-The tests cover world-draft persistence and recovery, local library favorites/categories/recent items, collection persistence and duplicate handling, collection import/export validation, shuffle history, automation repeat prevention, and search response failures.
+### A2. The Time Stone — Calendar Automation & System-Tray Operation
 
-## Current scope and limits
+Connects wallpaper ambiance to the user's schedule and operates continuously in the background:
 
-- Wallpaper search and downloads require an internet connection and depend on the selected public provider.
-- Weather and calendar rules are optional and depend on their source being reachable or available.
-- Collection cycle and automation schedules run while the app is open; this is not a Windows background service or a login-startup task.
-- The Windows portable app image is the current packaging target. A native installer needs WiX 3.x. macOS and Linux application bundles are not included in this Windows build.
-- World names, places, characters, story ideas, memory-photo paths, stories, quotes, and custom screen ratios are saved locally in `worlds.json`.
+- **Remote Calendar Feeds (Google Calendar / iCal / WebCal)**: Paste any remote calendar iCal secret address (e.g. `https://calendar.google.com/calendar/ical/.../basic.ics` or `webcal://...`) to automatically sync events.
+- **Local `.ics` & Classic Outlook**: Supports local `.ics` calendar files and Classic Outlook via Windows COM.
+- **Keyword Matching**: Apply dedicated wallpapers or vaults when event titles match keywords (e.g. "meeting", "focus", "standup").
+- **System-Tray Presence**:
+  - RealityWeaver installs a native system tray icon with a cosmic crest.
+  - Closing the main window minimizes RealityWeaver to the system tray (`stage.hide()`) so automation continues uninterrupted.
+  - Tray popup menu provides:
+    - *Open RealityWeaver*
+    - *Trigger Next / Check Rules Now*
+    - *Resume Automation*
+    - *Toggle wallpaper automation*
+    - *Exit RealityWeaver*
+
+---
+
+## Architecture & Storage
+
+All user data and configuration persist locally on the user's computer:
+
+| Component | Storage Path | Description |
+|-----------|--------------|-------------|
+| **Preferences & Rules** | `~/.realityweaver/preferences.json` | Cross-platform JSON-backed preferences engine (`FilePreferences`) eliminating registry permissions issues. |
+| **Wallpaper Vaults** | `~/.realityweaver/collections/*.json` | Named collection definitions and image references. |
+| **Downloaded Wallpapers** | `~/.realityweaver/wallpapers/` | Full-resolution wallpapers downloaded from discovery sources. |
+| **Thumbnail Cache** | `~/.realityweaver/thumbnail-cache/` | SHA-256 hashed thumbnail preview cache. |
+| **Applied Copies** | `Pictures/RealityWeaver/` | Formatted wallpaper files for native Windows desktop application. |
+| **World Drafts & Lore** | `~/.realityweaver/worlds.json` | Creative worlds and world-building notes. |
+
+---
+
+## Optional Integrations & Keys
+
+- **Open-Meteo**: Built-in; requires zero configuration and no API keys.
+- **Google Calendar / iCal**: Paste your calendar's private/secret iCal address into the **Automation** tab.
+- **Wallhaven API Key**: Optional. Enter in the **Settings** tab to unlock personalized saved collections and remove public search rate limits.

@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.realityweaver.util.AppPreferences;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -28,10 +29,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.prefs.Preferences;
@@ -39,16 +42,21 @@ import java.util.prefs.Preferences;
 /** Runs saved time, weather, and calendar wallpaper rules while the app is open. */
 public final class WallpaperAutomationService {
     private static final String ENABLED_KEY = "automation.enabled";
+    private static final String INTERVAL_CYCLE_ENABLED_KEY = "automation.intervalCycle.enabled";
+    private static final String INTERVAL_CYCLE_MINUTES_KEY = "automation.intervalCycle.minutes";
+    private static final String INTERVAL_CYCLE_COLLECTION_KEY = "automation.intervalCycle.collectionId";
     private static final String TIME_RULES_KEY = "automation.timeRules";
     private static final String WEATHER_RULES_KEY = "automation.weatherRules";
     private static final String CALENDAR_RULES_KEY = "automation.calendarRules";
     private static final String CALENDAR_FILE_KEY = "automation.calendarFile";
+    private static final String CALENDAR_URL_KEY = "automation.calendarUrl";
     private static final String OUTLOOK_ENABLED_KEY = "automation.outlookEnabled";
     private static final String AUTO_LOCATION_ENABLED_KEY = "automation.autoLocationEnabled";
     private static final String MANUAL_OVERRIDE_KEY = "automation.manualOverrideUntil";
     private static final int MAX_RULES_PER_TYPE = 30;
     private static final Duration WEATHER_CACHE_AGE = Duration.ofMinutes(15);
     private static final Duration OUTLOOK_CACHE_AGE = Duration.ofMinutes(1);
+    private static final Duration REMOTE_CALENDAR_CACHE_AGE = Duration.ofMinutes(5);
     private static final DateTimeFormatter ICAL_DATE = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter ICAL_DATE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss");
     private static final DateTimeFormatter ICAL_SHORT_DATE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmm");
@@ -87,10 +95,9 @@ public final class WallpaperAutomationService {
 
     private final Preferences preferences;
     private final WallpaperService wallpaperService;
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(8))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    private final WallpaperCollectionStore collectionStore = new WallpaperCollectionStore();
+    private final Random random = new Random();
+    private volatile HttpClient httpClient;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "realityweaver-wallpaper-automation");
         thread.setDaemon(true);
@@ -106,21 +113,43 @@ public final class WallpaperAutomationService {
     private volatile Instant outlookEventsCheckedAt = Instant.EPOCH;
     private volatile Instant outlookRetryAfter = Instant.EPOCH;
     private volatile String outlookUnavailableReason;
+    private volatile List<String> remoteCalendarLinesCache = List.of();
+    private volatile Instant remoteCalendarCheckedAt = Instant.EPOCH;
     private volatile boolean schedulerStarted;
+    private volatile ScheduledFuture<?> intervalCycleTask;
     private volatile Consumer<String> statusListener = ignored -> { };
     private volatile Instant manualOverrideUntil = Instant.EPOCH;
+    private volatile String latestStatus = "Automation is off.";
+    private volatile CachedWeather lastWeather;
 
     public WallpaperAutomationService() {
-        this(Preferences.userNodeForPackage(WallpaperAutomationService.class), new WallpaperService());
+        this(AppPreferences.forPackage(WallpaperAutomationService.class), new WallpaperService());
     }
 
     WallpaperAutomationService(Preferences preferences, WallpaperService wallpaperService) {
-        this.preferences = preferences;
-        this.wallpaperService = wallpaperService;
-        long savedOverride = preferences.getLong(MANUAL_OVERRIDE_KEY, 0L);
+        this.preferences = preferences != null ? preferences : AppPreferences.forPackage(WallpaperAutomationService.class);
+        this.wallpaperService = wallpaperService != null ? wallpaperService : new WallpaperService();
+        long savedOverride = this.preferences.getLong(MANUAL_OVERRIDE_KEY, 0L);
         if (savedOverride > 0) {
             manualOverrideUntil = Instant.ofEpochMilli(savedOverride);
         }
+    }
+
+    private HttpClient getHttpClient() {
+        HttpClient client = httpClient;
+        if (client == null) {
+            synchronized (this) {
+                client = httpClient;
+                if (client == null) {
+                    client = HttpClient.newBuilder()
+                            .connectTimeout(Duration.ofSeconds(8))
+                            .followRedirects(HttpClient.Redirect.NORMAL)
+                            .build();
+                    httpClient = client;
+                }
+            }
+        }
+        return client;
     }
 
     public enum WeatherCondition {
@@ -138,12 +167,24 @@ public final class WallpaperAutomationService {
         }
     }
 
-    public record TimeRule(String id, String time, Path wallpaper) { }
+    public record TimeRule(String id, String time, Path wallpaper, boolean enabled, String collectionId) {
+        public TimeRule(String id, String time, Path wallpaper) {
+            this(id, time, wallpaper, true, "");
+        }
+    }
 
     public record WeatherRule(String id, String city, boolean automaticLocation,
-            WeatherCondition condition, Path wallpaper) { }
+            WeatherCondition condition, Path wallpaper, boolean enabled, String collectionId) {
+        public WeatherRule(String id, String city, boolean automaticLocation, WeatherCondition condition, Path wallpaper) {
+            this(id, city, automaticLocation, condition, wallpaper, true, "");
+        }
+    }
 
-    public record CalendarRule(String id, String titleContains, Path wallpaper) { }
+    public record CalendarRule(String id, String titleContains, Path wallpaper, boolean enabled, String collectionId) {
+        public CalendarRule(String id, String titleContains, Path wallpaper) {
+            this(id, titleContains, wallpaper, true, "");
+        }
+    }
 
     public boolean isEnabled() {
         return preferences.getBoolean(ENABLED_KEY, false);
@@ -154,9 +195,18 @@ public final class WallpaperAutomationService {
         preferences.putBoolean(ENABLED_KEY, enabled);
         if (enabled) {
             startSchedulerIfNeeded();
+            if (isIntervalCycleEnabled() && intervalCycleTask == null) {
+                int mins = intervalCycleMinutes();
+                intervalCycleTask = scheduler.scheduleWithFixedDelay(
+                        this::triggerIntervalCycleNow, mins, mins, TimeUnit.MINUTES);
+            }
             publish("Automation is on. Checking saved rules.");
             checkNow();
         } else {
+            if (intervalCycleTask != null) {
+                intervalCycleTask.cancel(false);
+                intervalCycleTask = null;
+            }
             publish("Automation is off.");
         }
     }
@@ -165,6 +215,11 @@ public final class WallpaperAutomationService {
         statusListener = listener == null ? ignored -> { } : listener;
         if (isEnabled()) {
             startSchedulerIfNeeded();
+            if (isIntervalCycleEnabled() && intervalCycleTask == null) {
+                int mins = intervalCycleMinutes();
+                intervalCycleTask = scheduler.scheduleWithFixedDelay(
+                        this::triggerIntervalCycleNow, mins, mins, TimeUnit.MINUTES);
+            }
             publish("Automation is on. Checking saved rules.");
             checkNow();
         }
@@ -172,6 +227,88 @@ public final class WallpaperAutomationService {
 
     public void setStatusListener(Consumer<String> listener) {
         statusListener = listener == null ? ignored -> { } : listener;
+    }
+
+    public boolean isIntervalCycleEnabled() {
+        return preferences.getBoolean(INTERVAL_CYCLE_ENABLED_KEY, false);
+    }
+
+    public int intervalCycleMinutes() {
+        return Math.max(1, preferences.getInt(INTERVAL_CYCLE_MINUTES_KEY, 5));
+    }
+
+    public String intervalCycleCollectionId() {
+        return preferences.get(INTERVAL_CYCLE_COLLECTION_KEY, "");
+    }
+
+    public synchronized void setIntervalCycle(boolean enabled, int minutes, String collectionId) {
+        int validMinutes = Math.max(1, minutes);
+        preferences.putBoolean(INTERVAL_CYCLE_ENABLED_KEY, enabled);
+        preferences.putInt(INTERVAL_CYCLE_MINUTES_KEY, validMinutes);
+        preferences.put(INTERVAL_CYCLE_COLLECTION_KEY, collectionId != null ? collectionId : "");
+        if (intervalCycleTask != null) {
+            intervalCycleTask.cancel(false);
+            intervalCycleTask = null;
+        }
+        if (enabled) {
+            if (!isEnabled()) {
+                preferences.putBoolean(ENABLED_KEY, true);
+            }
+            resumeAutomation();
+            startSchedulerIfNeeded();
+            scheduler.execute(this::triggerIntervalCycleNow);
+            intervalCycleTask = scheduler.scheduleWithFixedDelay(
+                    this::triggerIntervalCycleNow, validMinutes, validMinutes, TimeUnit.MINUTES);
+            publish("Interval cycling active: changing wallpaper every " + validMinutes + (validMinutes == 1 ? " minute." : " minutes."));
+        } else {
+            publish("Interval cycling turned off.");
+        }
+    }
+
+    public void triggerIntervalCycleNow() {
+        if (!isEnabled()) {
+            return;
+        }
+        if (isManualOverrideActive()) {
+            resumeAutomation();
+        }
+        String collectionId = intervalCycleCollectionId();
+        if (collectionId != null && !collectionId.isBlank() && !collectionId.equalsIgnoreCase("all")) {
+            try {
+                WallpaperCollection col = collectionStore.find(collectionId);
+                if (col != null) {
+                    List<Path> available = col.wallpapers().stream()
+                            .filter(WallpaperCollection.WallpaperReference::isAvailable)
+                            .map(WallpaperCollection.WallpaperReference::path)
+                            .filter(p -> p != null && Files.isRegularFile(p))
+                            .toList();
+                    if (!available.isEmpty()) {
+                        Path chosen = (available.size() == 1) ? available.get(0)
+                                : available.get(random.nextInt(available.size()));
+                        try {
+                            wallpaperService.apply(chosen);
+                            publish("Interval cycle: applied “" + chosen.getFileName() + "” from “" + col.name() + "”.");
+                            return;
+                        } catch (Exception failure) {
+                            publish("Interval cycle failed to apply: " + safeMessage(failure));
+                            return;
+                        }
+                    }
+                }
+            } catch (Exception ignored) { }
+        }
+        // Fallback to library
+        WallpaperLibrary lib = new WallpaperLibrary();
+        List<Path> all = lib.load().stream().filter(Files::isRegularFile).toList();
+        if (!all.isEmpty()) {
+            Path chosen = (all.size() == 1) ? all.get(0) : all.get(random.nextInt(all.size()));
+            try {
+                wallpaperService.apply(chosen);
+                publish("Interval cycle: applied “" + chosen.getFileName() + "” from library.");
+            } catch (Exception failure) {
+                publish("Interval cycle failed: " + safeMessage(failure));
+            }
+        }
     }
 
     public void checkNow() {
@@ -194,25 +331,58 @@ public final class WallpaperAutomationService {
         publish("Manual wallpaper selected. Automatic changes are paused for one hour.");
     }
 
+    public void resumeAutomation() {
+        manualOverrideUntil = Instant.EPOCH;
+        preferences.remove(MANUAL_OVERRIDE_KEY);
+        lastTimeScheduleKey = null;
+        activeWeatherRuleId = null;
+        publish("Manual override cleared. Automation resumed.");
+        checkNow();
+    }
+
     public boolean isManualOverrideActive() {
         return Instant.now().isBefore(manualOverrideUntil);
     }
 
-    /** Applies a collection-cycle image only while automation is enabled and no manual override is active. */
+    public Duration manualOverrideRemaining() {
+        Instant now = Instant.now();
+        return now.isBefore(manualOverrideUntil) ? Duration.between(now, manualOverrideUntil) : Duration.ZERO;
+    }
+
+    public String latestStatus() {
+        return latestStatus;
+    }
+
+    public CachedWeather lastWeather() {
+        return lastWeather;
+    }
+
+    /** Applies a collection-cycle image while automation is enabled, automatically clearing any stale manual override. */
     public boolean applyCollectionWallpaper(Path wallpaper, String collectionName) {
-        if (!isEnabled() || isManualOverrideActive()) {
+        if (!isEnabled()) {
             return false;
+        }
+        if (isManualOverrideActive()) {
+            resumeAutomation();
         }
         return applyRule(wallpaper, "collection “" + collectionName + "”");
     }
 
     public void close() {
+        if (intervalCycleTask != null) {
+            intervalCycleTask.cancel(false);
+            intervalCycleTask = null;
+        }
         scheduler.shutdownNow();
     }
 
     public List<TimeRule> timeRules() {
         return readRules(TIME_RULES_KEY, element -> new TimeRule(
-                stringValue(element, "id"), stringValue(element, "time"), pathValue(element, "wallpaper")));
+                stringValue(element, "id"),
+                stringValue(element, "time"),
+                pathValue(element, "wallpaper"),
+                !element.has("enabled") || element.get("enabled").getAsBoolean(),
+                stringValue(element, "collectionId")));
     }
 
     public List<WeatherRule> weatherRules() {
@@ -223,21 +393,42 @@ public final class WallpaperAutomationService {
             } catch (IllegalArgumentException invalid) {
                 return null;
             }
-            return new WeatherRule(stringValue(element, "id"), stringValue(element, "city"),
+            return new WeatherRule(
+                    stringValue(element, "id"),
+                    stringValue(element, "city"),
                     element.has("automaticLocation") && element.get("automaticLocation").getAsBoolean(),
-                    condition, pathValue(element, "wallpaper"));
+                    condition,
+                    pathValue(element, "wallpaper"),
+                    !element.has("enabled") || element.get("enabled").getAsBoolean(),
+                    stringValue(element, "collectionId"));
         });
     }
 
     public List<CalendarRule> calendarRules() {
         return readRules(CALENDAR_RULES_KEY, element -> new CalendarRule(
-                stringValue(element, "id"), stringValue(element, "titleContains"),
-                pathValue(element, "wallpaper")));
+                stringValue(element, "id"),
+                stringValue(element, "titleContains"),
+                pathValue(element, "wallpaper"),
+                !element.has("enabled") || element.get("enabled").getAsBoolean(),
+                stringValue(element, "collectionId")));
     }
 
     public Path calendarFile() {
         String value = preferences.get(CALENDAR_FILE_KEY, "");
         return value.isBlank() ? null : Path.of(value);
+    }
+
+    public String calendarUrl() {
+        return preferences.get(CALENDAR_URL_KEY, "");
+    }
+
+    public void setCalendarUrl(String url) {
+        if (url == null || url.isBlank()) {
+            preferences.remove(CALENDAR_URL_KEY);
+        } else {
+            preferences.put(CALENDAR_URL_KEY, url.strip());
+        }
+        remoteCalendarCheckedAt = Instant.EPOCH;
     }
 
     public boolean isOutlookCalendarEnabled() {
@@ -267,17 +458,101 @@ public final class WallpaperAutomationService {
         }
     }
 
-    public void addTimeRule(String time, Path wallpaper) {
-        LocalTime parsedTime = LocalTime.parse(time);
+    public void setTimeRuleEnabled(String id, boolean enabled) {
         List<TimeRule> rules = new ArrayList<>(timeRules());
-        if (rules.stream().anyMatch(rule -> LocalTime.parse(rule.time()).equals(parsedTime))) {
-            throw new IllegalArgumentException("A daily rule already exists for that time.");
+        for (int i = 0; i < rules.size(); i++) {
+            TimeRule r = rules.get(i);
+            if (r.id().equals(id)) {
+                rules.set(i, new TimeRule(r.id(), r.time(), r.wallpaper(), enabled, r.collectionId()));
+                break;
+            }
+        }
+        writeTimeRules(rules);
+    }
+
+    public void setWeatherRuleEnabled(String id, boolean enabled) {
+        List<WeatherRule> rules = new ArrayList<>(weatherRules());
+        for (int i = 0; i < rules.size(); i++) {
+            WeatherRule r = rules.get(i);
+            if (r.id().equals(id)) {
+                rules.set(i, new WeatherRule(r.id(), r.city(), r.automaticLocation(), r.condition(), r.wallpaper(), enabled, r.collectionId()));
+                break;
+            }
+        }
+        writeWeatherRules(rules);
+    }
+
+    public void setCalendarRuleEnabled(String id, boolean enabled) {
+        List<CalendarRule> rules = new ArrayList<>(calendarRules());
+        for (int i = 0; i < rules.size(); i++) {
+            CalendarRule r = rules.get(i);
+            if (r.id().equals(id)) {
+                rules.set(i, new CalendarRule(r.id(), r.titleContains(), r.wallpaper(), enabled, r.collectionId()));
+                break;
+            }
+        }
+        writeCalendarRules(rules);
+    }
+
+    public static LocalTime parseTimeFlexibly(String text) {
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("Enter a valid time (e.g. 14:30 or 09:00).");
+        }
+        String s = text.strip();
+        try {
+            return LocalTime.parse(s);
+        } catch (DateTimeParseException ignored) { }
+
+        try {
+            return LocalTime.parse(s, DateTimeFormatter.ofPattern("H:mm"));
+        } catch (DateTimeParseException ignored) { }
+
+        try {
+            return LocalTime.parse(s.toUpperCase(Locale.ENGLISH), DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH));
+        } catch (DateTimeParseException ignored) { }
+
+        try {
+            return LocalTime.parse(s.toUpperCase(Locale.ENGLISH), DateTimeFormatter.ofPattern("h:mma", Locale.ENGLISH));
+        } catch (DateTimeParseException ignored) { }
+
+        if (s.matches("^\\d{1,2}$")) {
+            int hour = Integer.parseInt(s);
+            if (hour >= 0 && hour <= 23) {
+                return LocalTime.of(hour, 0);
+            }
+        }
+
+        throw new IllegalArgumentException("Time “" + text + "” could not be parsed. Use 24h format like 14:30 or 09:00.");
+    }
+
+    public void addTimeRule(String time, Path wallpaper) {
+        addTimeRule(time, wallpaper, "");
+    }
+
+    public void addTimeRule(String time, Path wallpaper, String collectionId) {
+        LocalTime parsedTime = parseTimeFlexibly(time);
+        String normalizedTime = parsedTime.format(DateTimeFormatter.ofPattern("HH:mm"));
+        List<TimeRule> rules = new ArrayList<>(timeRules());
+        if (rules.stream().anyMatch(rule -> {
+            try {
+                return LocalTime.parse(rule.time()).equals(parsedTime);
+            } catch (Exception e) {
+                return false;
+            }
+        })) {
+            throw new IllegalArgumentException("A daily rule already exists for that time (" + normalizedTime + ").");
         }
         ensureRoom(rules.size());
-        rules.add(new TimeRule(UUID.randomUUID().toString(), time, normalize(wallpaper)));
+        rules.add(new TimeRule(UUID.randomUUID().toString(), normalizedTime, wallpaper != null ? normalize(wallpaper) : null, true, collectionId));
+        writeTimeRules(rules);
+    }
+
+    private void writeTimeRules(List<TimeRule> rules) {
         writeRules(TIME_RULES_KEY, rules, rule -> {
             JsonObject json = baseRule(rule.id(), rule.wallpaper());
             json.addProperty("time", rule.time());
+            json.addProperty("enabled", rule.enabled());
+            json.addProperty("collectionId", rule.collectionId() != null ? rule.collectionId() : "");
             return json;
         });
     }
@@ -285,11 +560,7 @@ public final class WallpaperAutomationService {
     public void removeTimeRule(String id) {
         List<TimeRule> rules = new ArrayList<>(timeRules());
         if (rules.removeIf(rule -> rule.id().equals(id))) {
-            writeRules(TIME_RULES_KEY, rules, rule -> {
-                JsonObject json = baseRule(rule.id(), rule.wallpaper());
-                json.addProperty("time", rule.time());
-                return json;
-            });
+            writeTimeRules(rules);
         }
     }
 
@@ -298,6 +569,10 @@ public final class WallpaperAutomationService {
     }
 
     public void addWeatherRule(String city, WeatherCondition condition, Path wallpaper, boolean automaticLocation) {
+        addWeatherRule(city, condition, wallpaper, automaticLocation, "");
+    }
+
+    public void addWeatherRule(String city, WeatherCondition condition, Path wallpaper, boolean automaticLocation, String collectionId) {
         String normalizedCity = city == null ? "" : city.strip();
         if ((!automaticLocation && normalizedCity.isBlank()) || condition == null) {
             throw new IllegalArgumentException("Choose a weather location and condition.");
@@ -310,12 +585,18 @@ public final class WallpaperAutomationService {
         }
         ensureRoom(rules.size());
         rules.add(new WeatherRule(UUID.randomUUID().toString(), normalizedCity, automaticLocation, condition,
-                normalize(wallpaper)));
+                wallpaper != null ? normalize(wallpaper) : null, true, collectionId));
+        writeWeatherRules(rules);
+    }
+
+    private void writeWeatherRules(List<WeatherRule> rules) {
         writeRules(WEATHER_RULES_KEY, rules, rule -> {
             JsonObject json = baseRule(rule.id(), rule.wallpaper());
             json.addProperty("city", rule.city());
             json.addProperty("automaticLocation", rule.automaticLocation());
             json.addProperty("condition", rule.condition().name());
+            json.addProperty("enabled", rule.enabled());
+            json.addProperty("collectionId", rule.collectionId() != null ? rule.collectionId() : "");
             return json;
         });
     }
@@ -323,13 +604,7 @@ public final class WallpaperAutomationService {
     public void removeWeatherRule(String id) {
         List<WeatherRule> rules = new ArrayList<>(weatherRules());
         if (rules.removeIf(rule -> rule.id().equals(id))) {
-            writeRules(WEATHER_RULES_KEY, rules, rule -> {
-                JsonObject json = baseRule(rule.id(), rule.wallpaper());
-                json.addProperty("city", rule.city());
-                json.addProperty("automaticLocation", rule.automaticLocation());
-                json.addProperty("condition", rule.condition().name());
-                return json;
-            });
+            writeWeatherRules(rules);
         }
         if (id.equals(activeWeatherRuleId)) {
             activeWeatherRuleId = null;
@@ -338,6 +613,10 @@ public final class WallpaperAutomationService {
     }
 
     public void addCalendarRule(String titleContains, Path wallpaper) {
+        addCalendarRule(titleContains, wallpaper, "");
+    }
+
+    public void addCalendarRule(String titleContains, Path wallpaper, String collectionId) {
         String normalizedTitle = titleContains == null ? "" : titleContains.strip();
         if (normalizedTitle.isBlank()) {
             throw new IllegalArgumentException("Enter a title or keyword from the calendar event.");
@@ -347,10 +626,17 @@ public final class WallpaperAutomationService {
             throw new IllegalArgumentException("A calendar rule already exists for that title keyword.");
         }
         ensureRoom(rules.size());
-        rules.add(new CalendarRule(UUID.randomUUID().toString(), normalizedTitle, normalize(wallpaper)));
+        rules.add(new CalendarRule(UUID.randomUUID().toString(), normalizedTitle,
+                wallpaper != null ? normalize(wallpaper) : null, true, collectionId));
+        writeCalendarRules(rules);
+    }
+
+    private void writeCalendarRules(List<CalendarRule> rules) {
         writeRules(CALENDAR_RULES_KEY, rules, rule -> {
             JsonObject json = baseRule(rule.id(), rule.wallpaper());
             json.addProperty("titleContains", rule.titleContains());
+            json.addProperty("enabled", rule.enabled());
+            json.addProperty("collectionId", rule.collectionId() != null ? rule.collectionId() : "");
             return json;
         });
     }
@@ -358,11 +644,7 @@ public final class WallpaperAutomationService {
     public void removeCalendarRule(String id) {
         List<CalendarRule> rules = new ArrayList<>(calendarRules());
         if (rules.removeIf(rule -> rule.id().equals(id))) {
-            writeRules(CALENDAR_RULES_KEY, rules, rule -> {
-                JsonObject json = baseRule(rule.id(), rule.wallpaper());
-                json.addProperty("titleContains", rule.titleContains());
-                return json;
-            });
+            writeCalendarRules(rules);
         }
         preferences.remove("automation.lastCalendarEvent." + id);
         lastCalendarApplication.remove(id);
@@ -371,32 +653,18 @@ public final class WallpaperAutomationService {
     public void removeWallpaper(Path wallpaper) {
         Path normalized = normalize(wallpaper);
         List<TimeRule> time = new ArrayList<>(timeRules());
-        if (time.removeIf(rule -> rule.wallpaper().equals(normalized))) {
-            writeRules(TIME_RULES_KEY, time, rule -> {
-                JsonObject json = baseRule(rule.id(), rule.wallpaper());
-                json.addProperty("time", rule.time());
-                return json;
-            });
+        if (time.removeIf(rule -> normalized.equals(rule.wallpaper()))) {
+            writeTimeRules(time);
         }
 
         List<WeatherRule> weather = new ArrayList<>(weatherRules());
-        if (weather.removeIf(rule -> rule.wallpaper().equals(normalized))) {
-            writeRules(WEATHER_RULES_KEY, weather, rule -> {
-                JsonObject json = baseRule(rule.id(), rule.wallpaper());
-                json.addProperty("city", rule.city());
-                json.addProperty("automaticLocation", rule.automaticLocation());
-                json.addProperty("condition", rule.condition().name());
-                return json;
-            });
+        if (weather.removeIf(rule -> normalized.equals(rule.wallpaper()))) {
+            writeWeatherRules(weather);
         }
 
         List<CalendarRule> calendar = new ArrayList<>(calendarRules());
-        if (calendar.removeIf(rule -> rule.wallpaper().equals(normalized))) {
-            writeRules(CALENDAR_RULES_KEY, calendar, rule -> {
-                JsonObject json = baseRule(rule.id(), rule.wallpaper());
-                json.addProperty("titleContains", rule.titleContains());
-                return json;
-            });
+        if (calendar.removeIf(rule -> normalized.equals(rule.wallpaper()))) {
+            writeCalendarRules(calendar);
         }
     }
 
@@ -405,7 +673,7 @@ public final class WallpaperAutomationService {
             return;
         }
         schedulerStarted = true;
-        scheduler.scheduleWithFixedDelay(this::checkRulesSafely, 1, 1, TimeUnit.MINUTES);
+        scheduler.scheduleWithFixedDelay(this::checkRulesSafely, 3, 20, TimeUnit.SECONDS);
     }
 
     private void checkRulesSafely() {
@@ -424,17 +692,18 @@ public final class WallpaperAutomationService {
             publish("Manual wallpaper override is active. Automatic changes resume in one hour.");
             return;
         }
-        List<TimeRule> time = timeRules();
-        List<WeatherRule> weather = weatherRules();
-        List<CalendarRule> calendar = calendarRules();
+        List<TimeRule> time = timeRules().stream().filter(TimeRule::enabled).toList();
+        List<WeatherRule> weather = weatherRules().stream().filter(WeatherRule::enabled).toList();
+        List<CalendarRule> calendar = calendarRules().stream().filter(CalendarRule::enabled).toList();
         if (time.isEmpty() && weather.isEmpty() && calendar.isEmpty()) {
-            publish("Automation is on. Add a time, weather, or calendar rule.");
+            publish("Automation is on. Add an active time, weather, or calendar rule.");
             return;
         }
 
         String latestIssue = null;
         ZonedDateTime now = ZonedDateTime.now();
 
+        // 1. Calendar Rules (Priority 1)
         if (!calendar.isEmpty()) {
             List<CalendarEvent> outlookEvents = List.of();
             if (isOutlookCalendarEnabled()) {
@@ -448,10 +717,7 @@ public final class WallpaperAutomationService {
                         return;
                     }
                     outlookUnavailableReason = safeMessage(failure);
-                    latestIssue = "Local Outlook calendar is unavailable. Choose a local .ics file to use calendar rules.";
                 }
-            } else if (calendarFile() == null) {
-                latestIssue = "Enable the local Outlook calendar or choose a local .ics file to use calendar rules.";
             }
 
             for (CalendarRule rule : calendar) {
@@ -459,6 +725,8 @@ public final class WallpaperAutomationService {
                         .filter(candidate -> candidate.title().toLowerCase(Locale.ROOT)
                                 .contains(rule.titleContains().toLowerCase(Locale.ROOT)))
                         .findFirst().orElse(null);
+
+                // Check local .ics file
                 Path file = calendarFile();
                 if (event == null && file != null && Files.isRegularFile(file)) {
                     try {
@@ -467,13 +735,23 @@ public final class WallpaperAutomationService {
                         latestIssue = "Local .ics calendar could not be checked: " + safeMessage(failure);
                     }
                 }
+
+                // Check remote calendar URL
+                if (event == null && !calendarUrl().isBlank()) {
+                    try {
+                        event = activeRemoteEvent(calendarUrl(), rule.titleContains(), now);
+                    } catch (Exception failure) {
+                        latestIssue = "Remote calendar feed could not be checked: " + safeMessage(failure);
+                    }
+                }
+
                 if (event != null) {
                     lastTimeScheduleKey = null;
                     activeWeatherRuleId = null;
                     String previousEvent = lastCalendarApplication.computeIfAbsent(rule.id(), id ->
                             preferences.get("automation.lastCalendarEvent." + id, ""));
                     if (isNewCalendarEvent(event.key(), previousEvent)) {
-                        if (applyRule(rule.wallpaper(), "calendar event “" + event.title() + "”")) {
+                        if (applyRuleOrCollection(rule.wallpaper(), rule.collectionId(), "calendar event “" + event.title() + "”")) {
                             lastCalendarApplication.put(rule.id(), event.key());
                             preferences.put("automation.lastCalendarEvent." + rule.id(), event.key());
                         }
@@ -482,12 +760,14 @@ public final class WallpaperAutomationService {
                 }
             }
         }
+
+        // 2. Weather Rules (Priority 2)
         for (WeatherRule rule : weather) {
             try {
                 CachedWeather current = currentWeather(rule.city(), rule.automaticLocation());
                 if (current.condition() == rule.condition()) {
                     if (!rule.id().equals(activeWeatherRuleId)) {
-                        if (applyRule(rule.wallpaper(), current.locationLabel() + " weather: " + current.condition())) {
+                        if (applyRuleOrCollection(rule.wallpaper(), rule.collectionId(), current.locationLabel() + " weather: " + current.condition())) {
                             activeWeatherRuleId = rule.id();
                             lastTimeScheduleKey = null;
                             return;
@@ -511,12 +791,13 @@ public final class WallpaperAutomationService {
             lastTimeScheduleKey = null;
         }
 
+        // 3. Time Rules (Priority 3)
         TimeRule activeTimeRule = activeTimeRule(time, now);
         if (activeTimeRule != null) {
             String scheduleKey = timeScheduleKey(activeTimeRule, now);
             if (!scheduleKey.equals(lastTimeScheduleKey)) {
                 LocalTime trigger = LocalTime.parse(activeTimeRule.time());
-                if (applyRule(activeTimeRule.wallpaper(), "local time "
+                if (applyRuleOrCollection(activeTimeRule.wallpaper(), activeTimeRule.collectionId(), "local time "
                         + trigger.format(DateTimeFormatter.ofPattern("HH:mm")))) {
                     lastTimeScheduleKey = scheduleKey;
                     return;
@@ -587,6 +868,34 @@ public final class WallpaperAutomationService {
         return eventKey != null && !eventKey.isBlank() && !eventKey.equals(lastAppliedEventKey);
     }
 
+    private boolean applyRuleOrCollection(Path wallpaper, String collectionId, String reason) {
+        if (!isEnabled()) {
+            return false;
+        }
+        if (collectionId != null && !collectionId.isBlank()) {
+            try {
+                WallpaperCollection collection = collectionStore.find(collectionId);
+                if (collection != null && !collection.wallpapers().isEmpty()) {
+                    List<Path> available = collection.wallpapers().stream()
+                            .filter(WallpaperCollection.WallpaperReference::isAvailable)
+                            .map(WallpaperCollection.WallpaperReference::path)
+                            .filter(p -> p != null && Files.isRegularFile(p))
+                            .toList();
+                    if (!available.isEmpty()) {
+                        Path chosen = available.get(random.nextInt(available.size()));
+                        return applyRule(chosen, reason + " (from collection “" + collection.name() + "”)");
+                    }
+                }
+            } catch (Exception failure) {
+                // Fall back to direct wallpaper if available
+            }
+        }
+        if (wallpaper != null && Files.isRegularFile(wallpaper)) {
+            return applyRule(wallpaper, reason);
+        }
+        return false;
+    }
+
     private boolean applyRule(Path wallpaper, String reason) {
         if (!isEnabled()) {
             return false;
@@ -601,7 +910,7 @@ public final class WallpaperAutomationService {
         }
     }
 
-    private CachedWeather currentWeather(String city, boolean automaticLocation)
+    public CachedWeather currentWeather(String city, boolean automaticLocation)
             throws IOException, InterruptedException {
         String normalized = automaticLocation ? "pc-location" : city.strip().toLowerCase(Locale.ROOT);
         CachedWeather cached = weatherCache.get(normalized);
@@ -655,7 +964,7 @@ public final class WallpaperAutomationService {
             String latitude = Double.toString(coordinates.latitude());
             String longitude = Double.toString(coordinates.longitude());
             JsonObject response = getJson("https://api.open-meteo.com/v1/forecast?latitude=" + latitude
-                    + "&longitude=" + longitude + "&current=weather_code&timezone=auto");
+                    + "&longitude=" + longitude + "&current=weather_code,temperature_2m&timezone=auto");
             JsonObject current = response.getAsJsonObject("current");
             if (current == null || !current.has("weather_code")) {
                 throw new IOException("The weather service did not return current conditions.");
@@ -665,7 +974,10 @@ public final class WallpaperAutomationService {
                 throw new IOException("The current weather condition is not recognized.");
             }
             weatherRetryAfter.remove(normalized);
-            CachedWeather result = new CachedWeather(condition, coordinates.locationLabel(), now);
+            double temp = current.has("temperature_2m") && !current.get("temperature_2m").isJsonNull()
+                    ? current.get("temperature_2m").getAsDouble() : Double.NaN;
+            CachedWeather result = new CachedWeather(condition, coordinates.locationLabel(), temp, now);
+            lastWeather = result;
             weatherCache.put(normalized, result);
             return result;
         } catch (IOException failure) {
@@ -759,7 +1071,7 @@ public final class WallpaperAutomationService {
                 .header("User-Agent", "RealityWeaver/1.0")
                 .GET()
                 .build();
-        HttpResponse<String> response = httpClient.send(request,
+        HttpResponse<String> response = getHttpClient().send(request,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Location or weather service returned HTTP " + response.statusCode() + ".");
@@ -794,8 +1106,33 @@ public final class WallpaperAutomationService {
     }
 
     private CalendarEvent activeEvent(Path calendar, String titleContains, ZonedDateTime now) throws IOException {
+        return parseActiveEvent(Files.readAllLines(calendar, StandardCharsets.UTF_8), titleContains, now);
+    }
+
+    private CalendarEvent activeRemoteEvent(String url, String titleContains, ZonedDateTime now) throws Exception {
+        Instant currentInstant = Instant.now();
+        if (Duration.between(remoteCalendarCheckedAt, currentInstant).compareTo(REMOTE_CALENDAR_CACHE_AGE) >= 0 || remoteCalendarLinesCache.isEmpty()) {
+            String fetchUrl = url.trim();
+            if (fetchUrl.startsWith("webcal://")) {
+                fetchUrl = "https://" + fetchUrl.substring("webcal://".length());
+            }
+            HttpRequest req = HttpRequest.newBuilder(URI.create(fetchUrl))
+                    .timeout(Duration.ofSeconds(12))
+                    .header("User-Agent", "RealityWeaver/1.0")
+                    .GET()
+                    .build();
+            HttpResponse<String> res = getHttpClient().send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (res.statusCode() >= 200 && res.statusCode() < 300) {
+                remoteCalendarLinesCache = res.body().lines().toList();
+                remoteCalendarCheckedAt = currentInstant;
+            }
+        }
+        return parseActiveEvent(remoteCalendarLinesCache, titleContains, now);
+    }
+
+    private CalendarEvent parseActiveEvent(List<String> rawLines, String titleContains, ZonedDateTime now) {
         List<String> unfoldedLines = new ArrayList<>();
-        for (String line : Files.readAllLines(calendar, StandardCharsets.UTF_8)) {
+        for (String line : rawLines) {
             if ((line.startsWith(" ") || line.startsWith("\t")) && !unfoldedLines.isEmpty()) {
                 int last = unfoldedLines.size() - 1;
                 unfoldedLines.set(last, unfoldedLines.get(last) + line.substring(1));
@@ -914,6 +1251,7 @@ public final class WallpaperAutomationService {
     }
 
     private void publish(String message) {
+        latestStatus = message;
         try {
             statusListener.accept(message);
         } catch (RuntimeException ignored) {
@@ -934,7 +1272,7 @@ public final class WallpaperAutomationService {
 
     private Path normalize(Path path) {
         if (path == null) {
-            throw new IllegalArgumentException("Choose a wallpaper image first.");
+            return null;
         }
         return path.toAbsolutePath().normalize();
     }
@@ -942,7 +1280,9 @@ public final class WallpaperAutomationService {
     private JsonObject baseRule(String id, Path wallpaper) {
         JsonObject json = new JsonObject();
         json.addProperty("id", id);
-        json.addProperty("wallpaper", wallpaper.toString());
+        if (wallpaper != null) {
+            json.addProperty("wallpaper", wallpaper.toString());
+        }
         return json;
     }
 
@@ -984,9 +1324,13 @@ public final class WallpaperAutomationService {
         return value.isBlank() ? null : Path.of(value).toAbsolutePath().normalize();
     }
 
-    private record Coordinates(double latitude, double longitude, String locationLabel) { }
+    public record Coordinates(double latitude, double longitude, String locationLabel) { }
 
-    private record CachedWeather(WeatherCondition condition, String locationLabel, Instant checkedAt) { }
+    public record CachedWeather(WeatherCondition condition, String locationLabel, double temperature, Instant checkedAt) {
+        public CachedWeather(WeatherCondition condition, String locationLabel, Instant checkedAt) {
+            this(condition, locationLabel, Double.NaN, checkedAt);
+        }
+    }
 
     private record ParsedDate(ZonedDateTime value, boolean allDay) { }
 
